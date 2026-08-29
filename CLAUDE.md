@@ -17,19 +17,20 @@ question is ambiguous, choose the slower, more conservative path.
 6. No content, URL, or access code is ever spoken on a phone call.
 7. Every outreach attempt and state transition is logged immutably.
 
-## Model and vendor split
-- Speech in and out (STT and TTS for the outreach calls): Gemini API.
-- All other model work (drafting notification copy, summarizing, any
-  reasoning inside the product): DeepSeek v4.
-- Every model call goes through an adapter in `src/adapters/models/`.
-  No SDK import anywhere outside that directory. Swapping a vendor must
-  be a one-file change.
-- Both are external dependencies and both are covered by the weekly
-  health checks in spec §6.
-- Hard rule: no model output is ever trusted to make a state decision.
-  Models generate speech and text. Quorum, timers, and transitions are
-  deterministic code only. A hallucinating model must never be able to
-  advance the machine toward release.
+## No AI vendors in V1
+- V1 ships **no AI, no automated voice, and no automated calling**. There
+  is no Gemini, no DeepSeek, and no model dependency of any kind. See
+  DECISIONS.md Area 0 for the pivot.
+- Verification and outreach are performed **manually by the operator team**
+  through the operator console. All user-facing copy (NUDGE reminders,
+  cancel prompts) uses **static, human-written templates** — a template
+  cannot hallucinate.
+- If AI is ever reintroduced post-V1, it goes through an adapter in
+  `src/adapters/models/` (no SDK import outside that directory; swapping a
+  vendor is a one-file change), and this hard rule binds it: **no model
+  output is ever trusted to make a state decision.** Confirmations, quorum,
+  timers, and transitions are deterministic code only. A hallucinating
+  model must never be able to advance the machine toward release.
 
 ## Working style
 - Never introduce a timer, threshold, or delay not specified in the spec.

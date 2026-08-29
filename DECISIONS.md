@@ -84,10 +84,11 @@ superseded by it.**
   all seven invariants remain valid** — only the *mechanism* of
   VERIFYING changes from "automated outreach" to "operator-driven
   verification," and STALLED becomes "operator could not verify."
-- **CLAUDE.md** "Model and vendor split" (Gemini + DeepSeek) is **moot for
-  V1** under this pivot (see Area 3). Recommend updating CLAUDE.md to mark
-  that section "post-V1" rather than leaving it as a live V1 rule.
-  *Flagged, not yet done — will not edit CLAUDE.md without your say-so.*
+- **CLAUDE.md** "Model and vendor split" (Gemini + DeepSeek) is **removed
+  for V1** under this pivot (see Area 3). **Done:** the section was
+  replaced with a "No AI vendors in V1" statement at the user's explicit
+  instruction, keeping the forward-looking rule that no model output may
+  ever advance a state transition.
 
 ---
 
@@ -446,22 +447,26 @@ provisional on 1.1)**
   any release link, one-time code, or stored content.** Same rule as the
   old automated call — it now binds the human operator.
 
-### 11.2 How many confirmations before an operator can start HOLD — **OPEN**
+### 11.2 How many confirmations before an operator can start HOLD — **DECIDED**
 - **Question:** The original spec required **3** independent confirmations
   from **different groups** (invariant 4) before advancing. In manual mode,
   what is the minimum the operator must log before starting a HOLD?
-- **Status:** **OPEN — must be decided before building the start-HOLD
-  action.** The Phase A answer described the console UI (11.1) but did not
-  set a number.
-- **⚠ Why this matters:** With verification now a human judgment, the
-  multi-party check in **invariant 4** is the main defense against a single
-  operator's error or a single false report. The 30-day HOLD (0.1) is the
-  backstop, but it should not be the *only* check. **Recommendation
-  (conservative):** require the operator to log **at least 2 independent
-  confirmations from different relationship groups** before HOLD can start,
-  preserving the spirit of invariant 4. Confirm or override this number.
-- **Resolving action:** Pick the minimum N and whether group-diversity is
-  enforced.
+- **Decision:** **At least 3 confirmations, each from a different
+  relationship group** (family / colleague / friend / other), entered
+  manually by the operator in the console (11.1). Group-diversity is
+  enforced: **no two of the required confirmations may come from the same
+  group** — invariant 4 held exactly, now checked in the console rather
+  than by automated outreach.
+- **Reason:** Keeps the full strength of invariant 4 through the pivot. A
+  single operator error, or one person with several phones, cannot reach
+  the threshold; three different-group confirmations plus the 30-day HOLD
+  (0.1) are two independent defenses against a false positive.
+- **Enforcement:** The start-HOLD action is blocked in code until ≥3
+  confirmations from ≥3 distinct groups are recorded. Each recorded
+  confirmation is written to the immutable audit log (invariant 7) with its
+  contact identity, group, and the operator who entered it. The
+  self-dealing exclusion (11.3) applies: a recipient's own confirmation is
+  not counted toward a release to themselves.
 
 ### 11.3 Merged trustee/recipient roles + self-dealing guard — **DECIDED**
 - **Question:** A person may be both a confirmer and a recipient. May their
@@ -515,11 +520,11 @@ code enforces the timers, the cancel, and the audit log.
   fails safe toward delay (7.x).
 - No AI vendors in V1; NUDGE/cancel copy is static templates (3.4). The
   `src/adapters/models/` hook may be scaffolded empty for later.
+- Operator must log **≥3 confirmations from ≥3 different groups** before a
+  HOLD can start (11.2); invariant 4 enforced in the console.
 
 ## Must be resolved before relying on them
 
-- **Minimum confirmations before HOLD (11.2)** — OPEN; recommended ≥2 from
-  different groups. Decide before building the start-HOLD action.
 - **Jurisdiction (1.1)** — gates audit horizon (5.3) and light consent
   check (1.3). No longer a hard V1 blocker now that automated calls are
   gone.
@@ -532,5 +537,5 @@ code enforces the timers, the cancel, and the audit log.
 
 - Revise **PRODUCT_SPEC.md** §2/§6 wording from automated calling to
   manual verification (states & invariants unchanged) — see 0.2.
-- Mark **CLAUDE.md** "Model and vendor split" as post-V1 — see 0.2 / 3.4.
-  I will not touch CLAUDE.md without your go-ahead.
+- **CLAUDE.md** "Model and vendor split" — **done:** replaced with "No AI
+  vendors in V1" per user instruction (see 0.2 / 3.4).
