@@ -239,8 +239,9 @@ The drill is aimed at the human failure, not the technical one.
 - Access to a released page is logged and revocable by an admin.
 
 Ordering of recipients is strictly user-defined, with automatic fallback
-to the next recipient after N days of silence. **No randomization
-anywhere in the death path.** Random ordering means random reliability.
+to the next recipient after 14 days of silence (`DECISIONS.md` 11.4).
+**No randomization anywhere in the death path.** Random ordering means
+random reliability.
 
 ---
 

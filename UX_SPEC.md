@@ -5,11 +5,12 @@ layer that sits on top of the state machine and decisions already settled.
 
 **Read first:** `PRODUCT_SPEC.md` (behaviour and invariants) and
 `DECISIONS.md` (why). This document does not re-decide anything settled
-there; it describes the interface that expresses those decisions. Where a
-value is still **OPEN** in `DECISIONS.md` (e.g. soft-delete grace `N`,
-recipient-fallback silence window), the UX shows the *configured* value and
-never hard-codes a number — inventing an unspecified timer is forbidden by
-`CLAUDE.md`.
+there; it describes the interface that expresses those decisions. The
+timer values it depends on are now decided — recipient-fallback window
+**14 days** (`DECISIONS.md` 11.4), soft-delete grace **7 days** (5.2/11.3),
+launch jurisdiction **Bangladesh** (1.1). For any value not yet decided,
+the UX shows the *configured* value and never hard-codes a number —
+inventing an unspecified timer is forbidden by `CLAUDE.md`.
 
 ## The one rule, in interface terms
 
@@ -139,11 +140,11 @@ surprise.
 
 **Recipient ordering.** Recipients are placed in a strict, user-defined
 order — a drag-to-reorder list, no randomisation offered anywhere
-(spec §7). Copy explains fallback: "If {first recipient} doesn't respond,
-we move to the next after the waiting period." The waiting period is the
-recipient-fallback silence window, which is **OPEN** (`DECISIONS.md` 11.4):
-the UI shows the configured value once set and must not display or imply a
-number before then.
+(spec §7). Copy explains fallback: "If {first recipient} doesn't respond
+within **14 days**, we move to the next" (recipient-fallback silence
+window, `DECISIONS.md` 11.4). The 14-day window sits comfortably inside the
+30-day post-release retention (5.1) so a fallback recipient still has real
+access time.
 
 ### 1.4 Content authoring (resolves `DECISIONS.md` 9.1 UX)
 
@@ -226,11 +227,11 @@ surface.
   person who verifies your identity. This is slower on purpose — it means
   no attacker can reset their way into your account and force a release"
   (`DECISIONS.md` 8.2). Provides the contact path; the action is logged.
-- **Self-deletion while alive.** Soft delete with a grace period, then hard
-  delete (`DECISIONS.md` 5.2). The UI states content is erased on hard
-  delete and that the audit log keeps metadata only, never content. The
-  grace length `N` is **OPEN** (`DECISIONS.md` 5.2/11.3); the UI shows the
-  configured value once decided and must not display an invented number.
+- **Self-deletion while alive.** Soft delete with a **7-day** grace period,
+  then hard delete (`DECISIONS.md` 5.2). The UI states content is erased on
+  hard delete, that the account is recoverable for 7 days (manual, audited
+  recovery per 8.2), and that the audit log keeps metadata only, never
+  content.
 - **Support.** Business-hours human support surfaced here, alongside the
   always-on self-serve cancel, which is presented as the thing that never
   waits for a human (`DECISIONS.md` 6.1).
@@ -362,7 +363,7 @@ The single most safety-critical operator interaction.
   — the button cannot be forced early because the guard is not in the
   button.
 - On trigger, delivery follows the recipient order strictly, with fallback
-  after the configured silence window (§1.3; the window value is OPEN,
+  to the next recipient after **14 days** of silence (§1.3,
   `DECISIONS.md` 11.4). No randomisation control exists (spec §7).
 - **Public release**, if the user enabled it, is shown as scheduled 14 days
   after private release, framed as "the last chance to catch a wrong
@@ -459,10 +460,11 @@ These bind every surface above.
 8. **All user- and contact-facing copy is static, human-written template
    text** (`DECISIONS.md` 3.1) — no runtime language generation, no model
    output anywhere in the interface.
-9. **No unspecified timer is ever shown as a number.** Where a value is
-   OPEN in `DECISIONS.md` (soft-delete grace `N`, recipient-fallback
-   window), the UI renders the configured value once decided and never a
-   placeholder number (`CLAUDE.md` working style).
+9. **No unspecified timer is ever shown as a number.** Every timer in the
+   UX traces to a decided value — HOLD 30/21, NUDGE cadence, fallback
+   14 days, soft-delete grace 7 days. Should any future value be undecided,
+   the UI renders the configured value, never a placeholder number
+   (`CLAUDE.md` working style).
 10. **Accessibility and the panic case.** The check-in and cancel controls
     are the largest, highest-contrast, most reachable elements on their
     screens, usable one-handed and screen-reader-first, because they must
@@ -472,17 +474,19 @@ These bind every surface above.
 
 ## 7. Open items carried into Phase C
 
-UX decisions that depend on values still OPEN in `DECISIONS.md`; none may be
-resolved by inventing a number here:
+Resolved since first draft: recipient-fallback window (14 days),
+soft-delete grace (7 days), and launch jurisdiction (Bangladesh) are now
+decided and rendered as concrete values above.
+
+Genuinely remaining, carried into Phase C; none may be resolved by
+inventing a number here:
 
 - **Content-model detail** (formats, size limits, versioning) — finalise
   with the Phase C `Payload` schema (`DECISIONS.md` 9.1/11.5). This spec
   fixes the authoring *interface*, not the limits.
-- **Recipient-fallback silence window** display — value OPEN
-  (`DECISIONS.md` 11.4).
-- **Soft-delete grace `N`** display in the deletion flow — value OPEN
-  (`DECISIONS.md` 5.2/11.3).
-- **Jurisdiction-dependent copy** (consent wording, audit-horizon
-  statements) — light input pending 1.1 (`DECISIONS.md` 11.1).
+- **Jurisdiction-dependent copy** (Bangladesh consent wording, audit-horizon
+  confirmation, Bangladesh succession-practice advisory copy, cross-border
+  recipients) — legal follow-ups with counsel noted in `DECISIONS.md` 1.1;
+  none a V1 blocker.
 - **Minors / legal capacity** copy for account holders, contacts, and
-  recipients — pending 1.1 and counsel (`DECISIONS.md` 11.6).
+  recipients — decide with counsel (`DECISIONS.md` 11.6).

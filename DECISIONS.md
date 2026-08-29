@@ -68,12 +68,22 @@ automated-call-consent business. More conservative, not less.
 
 ## 1. Jurisdiction & legal
 
-### 1.1 Primary launch jurisdiction — **OPEN**
-- **Decision:** OPEN. Options: US (TCPA + state privacy + RUFADAA) · UK
-  (UK GDPR + PECR) · a single EU member state (GDPR + ePrivacy).
-- **Resolving action:** Pick the launch jurisdiction. Now a *light* input
-  (gates audit-log horizon in 5.3 and a consent check in 1.3), no longer a
-  hard V1 blocker since automated calls are gone.
+### 1.1 Primary launch jurisdiction — **DECIDED**
+- **Decision:** **Bangladesh.** V1 launches to a Bangladesh pilot.
+- **Reason:** Founder/operator base and small pilot scale (7.1) keep the
+  product manageable under a single jurisdiction.
+- **Legal follow-ups (with local counsel; none a V1 blocker):**
+  - Confirm the audit-log 2-year metadata horizon (5.3) against Bangladesh
+    record-keeping norms; change it only by explicit decision.
+  - Enrollment-consent wording (1.3): human outreach is lightly regulated;
+    confirm the stored consent timestamp is locally sufficient.
+  - The legal layer (1.2, spec §8) is advisory only — there is no
+    RUFADAA-style statute granting executor authority over digital assets
+    here; advisory copy must reflect Bangladesh succession practice and
+    flag cross-border recipients.
+  - Data localization / cross-border transfer: if email/SMS/storage vendors
+    sit abroad, check Bangladesh's draft data-protection provisions before
+    scaling past pilot (revisit with 7.2).
 
 ### 1.2 The legal layer (will / executor authority) — **DECIDED**
 - **Decision:** The product only **advises** — shows guidance on naming
@@ -170,19 +180,22 @@ automated-call-consent business. More conservative, not less.
   72h one-time access code is re-issuable within this window. "Final
   release" = the last release event on the account.
 
-### 5.2 User self-deletion while alive — **DECIDED (N OPEN)**
-- **Decision:** **Soft delete + grace period, then hard delete.** Content
-  is erased on hard delete; the immutable audit log keeps **metadata only,
-  never content.**
-- **OPEN:** Grace-period length **N** — pick alongside the account-
-  lifecycle policy.
+### 5.2 User self-deletion while alive — **DECIDED**
+- **Decision:** **Soft delete + 7-day grace period, then hard delete.**
+  Content is erased on hard delete; the immutable audit log keeps
+  **metadata only, never content.**
+- **Reason:** 7 days honors a genuine delete request promptly while leaving
+  a window to reverse a deletion forced by an attacker who seized the
+  account (recovery is manual, 8.2). Recovery within the window is manual
+  and logged (invariant 7).
 
 ### 5.3 Audit log retention — **DECIDED (horizon depends on 1.1)**
 - **Decision:** **Metadata only, retained 2 years.** Stores timestamps,
   channels, outcomes, operator actions, and state transitions — never
   content, URLs, or codes. Content purges never touch the audit trail.
-- **Note:** 2 years may be short for some jurisdictions' dispute needs;
-  revisit once 1.1 is set.
+- **Note:** Jurisdiction is Bangladesh (1.1); confirm the 2-year horizon
+  against local record-keeping norms with counsel. Change only by explicit
+  decision.
 
 ---
 
@@ -288,14 +301,14 @@ automated-call-consent business. More conservative, not less.
 
 ## 11. Still open
 
-- **11.1 Jurisdiction (1.1)** — light input for 5.3 and 1.3; not a V1
-  blocker.
+- **11.1 Jurisdiction (1.1)** — **RESOLVED: Bangladesh.** Legal follow-ups
+  with counsel are noted in 1.1; none is a V1 blocker.
 - **11.2 Automated dormancy policy (2.3)** — before scaling past pilot.
-- **11.3 Soft-delete grace length N (5.2)** — never introduce the timer
-  without an explicit decision (CLAUDE.md rule).
-- **11.4 Recipient-fallback silence window "N days" (spec §7)** — set in
-  Phase C; same no-unspecified-timer rule.
-- **11.5 Content-model detail (9.1)** — Phase B/C.
+- **11.3 Soft-delete grace length N (5.2)** — **RESOLVED: 7 days.**
+- **11.4 Recipient-fallback silence window (spec §7)** — **RESOLVED: 14
+  days**, comfortably under the 30-day post-release purge (5.1).
+- **11.5 Content-model detail (9.1)** — authoring UX fixed in `UX_SPEC.md`;
+  storage formats/limits/versioning remain for the Phase C `Payload` schema.
 - **11.6 Minors / legal capacity** — whether account holders, contacts, or
   recipients may be minors; decide with jurisdiction (1.1) and counsel.
 
@@ -317,7 +330,10 @@ automated-call-consent business. More conservative, not less.
   re-issuable (4.2); no operator ever speaks a link/code/content
   (invariant 6, 4.1).
 - Retention: 30-day post-release then purge (5.1); soft-delete-then-hard
-  for living users (5.2, N TBD); metadata-only audit log, 2 years (5.3).
+  for living users, 7-day grace (5.2); metadata-only audit log, 2 years
+  (5.3).
+- Launch jurisdiction Bangladesh (1.1); recipient fallback after 14 days of
+  silence (spec §7); pilot scale (7.1).
 - Business-hours support + always-on tokenized self-serve cancel (6.1).
 - Pilot scale, founder-run operator review, everything fails safe toward
   delay (7.x).
