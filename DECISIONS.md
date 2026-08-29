@@ -19,6 +19,78 @@ negative (release late) is cheap.
 
 ---
 
+## Area 0 — Major V1 pivot: no AI, manual operations
+
+**This decision reshapes the whole of V1 and supersedes parts of the
+original spec. Read it first — several later entries are annotated as
+superseded by it.**
+
+- **Decision:** V1 ships **no AI voice, no automated calling agents, and
+  no automated trustee-outreach state machine.** "We are not an AI
+  company; we are a product-delivery process." The software's job in V1 is
+  to **connect users, track their aliveness, and give the operator team
+  the tools to verify and deliver manually.**
+- **What the software still does automatically (the built infrastructure):**
+  - User accounts, encrypted content storage, contact/recipient lists.
+  - The **liveness system**: check-ins, missed-check-in detection, and the
+    NUDGE reminders to the *user only* (no third party — invariant 2 holds
+    trivially, since nothing automated contacts third parties at all).
+  - Flagging accounts to an **operator queue** when a user is unresponsive
+    for a long period.
+  - The **HOLD cancel window** — a deterministic timer plus an always-on
+    one-tap "I'm alive" cancel link (see 0.1). This stays fully automated
+    and is the primary safety mechanism.
+  - The **release delivery** to recipients (gated page + one-time code)
+    once a HOLD elapses.
+  - Immutable audit logging of every operator action and state transition
+    (invariant 7).
+- **What humans (the founder/small team, ≤~100 customers) do manually:**
+  - Notice/confirm a long-unresponsive user (operator queue).
+  - Any outreach to the user's contacts is done by a person, not an
+    automated call. Verify aliveness / death / accident state.
+  - Record findings in an operator note field (alive / deceased / accident
+    + free text), viewing contacts one at a time on screen.
+  - Decide to **start** a HOLD when they believe a user has died.
+- **Reason:** Removes the entire automated-calling risk surface, matches
+  the team's actual capacity at pilot scale (≤100 customers, 7.1), and
+  keeps the company out of the AI-vendor and automated-call-consent
+  business for V1. This is *more* conservative, not less — fewer automated
+  paths that could be wrong.
+
+### 0.1 HOLD is mandatory even for manual release — **DECIDED (invariant-critical)**
+- **Question:** When an operator marks a user deceased, does content
+  release immediately, or still pass through the HOLD cancel window?
+- **Decision:** **HOLD is mandatory. The operator can only *start* the
+  window — never skip it.** Marking deceased begins HOLD; the user is
+  pinged on every channel with a one-tap cancel; content releases **only**
+  if the full window elapses with no cancel.
+- **HOLD length (manual mode):** **30 days** (matches spec §2 lenient
+  mode).
+- **Reason:** Preserves **invariant 1** (CANCELLED reachable from every
+  state) and **invariant 3** (no release before a HOLD window fully
+  elapses). Manual verification is fallible; the 30-day window + one-tap
+  cancel is what keeps a wrongly-flagged *living* user's mistake
+  recoverable. An earlier answer proposed instant operator release with no
+  window; that was **rejected at the interview** because it breaks
+  invariant 3 and removes the product's core irreversible-safety promise.
+- **Non-negotiable:** No operator action, admin role, or "verified"
+  status may bypass the HOLD timer. The timer is deterministic code, not
+  an operator judgment.
+
+### 0.2 Downstream document impact — **ACTION NEEDED**
+- **PRODUCT_SPEC.md** §2 (VERIFYING as automated batched calls), §6
+  (automated weekly test *calls*), and the AI-calling assumptions need a
+  revision pass to describe manual verification. The **eight states and
+  all seven invariants remain valid** — only the *mechanism* of
+  VERIFYING changes from "automated outreach" to "operator-driven
+  verification," and STALLED becomes "operator could not verify."
+- **CLAUDE.md** "Model and vendor split" (Gemini + DeepSeek) is **moot for
+  V1** under this pivot (see Area 3). Recommend updating CLAUDE.md to mark
+  that section "post-V1" rather than leaving it as a live V1 rule.
+  *Flagged, not yet done — will not edit CLAUDE.md without your say-so.*
+
+---
+
 ## Area 1 — Jurisdiction & legal
 
 ### 1.1 Primary launch jurisdiction — **OPEN**
@@ -47,22 +119,21 @@ negative (release late) is cheap.
   onboarding and in the quarterly drill. Revisit if support sees stranded
   estates.
 
-### 1.3 Automated-call consent at enrollment — **PROVISIONAL**
-- **Question:** How strict a consent posture for automated outreach calls
-  to trustees?
-- **Options:** Explicit written opt-in (logged + timestamped) · Double
-  opt-in via separate channel · Implied consent from being added.
-- **Decision (provisional):** **Implied consent from being added.**
-- **⚠ Conflict:** This contradicts **spec §4**, which states every
-  trustee "must opt in when added… a legal requirement in most
-  jurisdictions for automated calls, not a nicety." With jurisdiction
-  (1.1) OPEN, this cannot be validated as compliant anywhere.
-- **Status:** Held as PROVISIONAL, not DECIDED. Per the conservative
-  rule, do not build implied-consent-only calling until jurisdiction is
-  chosen and counsel confirms. Enrollment should still capture a
-  consent timestamp field so upgrading to explicit opt-in is a data
-  change, not a schema change.
-- **Resolving action:** Resolve 1.1, then legal review.
+### 1.3 Contact/recipient consent at enrollment — **PROVISIONAL (largely relaxed by Area 0)**
+- **Question:** How strict a consent posture for outreach to the user's
+  contacts?
+- **Original decision (provisional):** Implied consent from being added.
+- **Impact of Area 0 pivot:** The spec §4 conflict was about **automated**
+  calls, which are **removed from V1**. Any V1 outreach to a contact is
+  performed by a **human team member**, which is far less regulated than
+  an automated/robocall in every jurisdiction considered. So the sharpest
+  version of the conflict no longer applies to V1.
+- **Status:** Still **PROVISIONAL** but lower-risk. Enrollment should
+  still capture a **consent timestamp** field so that (a) a person knows
+  they may be contacted by the team, and (b) re-introducing any automated
+  calling later is a data change, not a schema change.
+- **Resolving action:** Resolve 1.1, then a light legal check on
+  human-initiated contact. No longer a V1 blocker.
 
 ---
 
@@ -103,9 +174,29 @@ negative (release late) is cheap.
 
 ## Area 3 — Vendor risk
 
-Model/vendor split is fixed by CLAUDE.md: **Gemini** for speech (STT/TTS
-on calls), **DeepSeek v4** for all other text/reasoning. Overarching hard
-rule: **no model output ever advances the state machine.**
+> **SUPERSEDED FOR V1 by Area 0.** The pivot removes AI from V1 entirely.
+> The entries below are retained for history and for whenever automated
+> outreach/AI is reconsidered post-V1. See 3.4 for the V1 position.
+
+### 3.4 AI vendors in V1 — **DECIDED: none**
+- **Decision:** **V1 uses neither Gemini nor DeepSeek.** Speech (Gemini)
+  is unneeded because there are no automated calls. Text drafting
+  (DeepSeek) is replaced by **static, human-written templates** for the
+  user-facing NUDGE reminders and cancel prompts — which is safer anyway,
+  since a template can never hallucinate.
+- **Reason:** Matches Area 0. Removes both external AI dependencies and
+  their failure modes from the V1 risk surface.
+- **CLAUDE.md note:** The "Model and vendor split" section is therefore
+  **post-V1 guidance**, not a live V1 rule. Flagged in 0.2. The
+  `src/adapters/models/` boundary can still be scaffolded empty so the
+  hook exists if AI is added later — but no adapter is wired in V1.
+
+---
+
+Model/vendor split *(original, pre-pivot — retained for history):*
+CLAUDE.md fixed **Gemini** for speech (STT/TTS on calls), **DeepSeek v4**
+for all other text/reasoning. Overarching hard rule: **no model output
+ever advances the state machine.**
 
 ### 3.1 Gemini (speech) unavailable — **DECIDED**
 - **Question:** If Gemini is deprecated, region-blocked, or price-spiked,
@@ -322,15 +413,10 @@ provisional on 1.1)**
 
 ## Area 10 — Open items to resolve before / during later phases
 
-- **10.1 Trustee-who-is-also-a-recipient — OPEN.** The Phase A answer
-  described the authoring interface (9.1) rather than resolving this. It
-  remains a **known adversarial vector** (prompt-pack Step 7): a person
-  who both confirms death and receives content has a self-dealing
-  incentive. **Resolving action:** decide between (a) prohibiting the same
-  identity as both trustee and recipient at enrollment, or (b) allowing it
-  but excluding their confirmation from any quorum that would release to
-  themselves. Must be resolved before Step 2 (state machine) hard-codes
-  quorum eligibility.
+- **10.1 Trustee-who-is-also-a-recipient — RESOLVED (see 11.3).** Decided:
+  roles may merge (one person can be both), **but a person's own
+  death-confirmation may never count toward a release that delivers to
+  themselves.** Moved to 11.3.
 - **10.2 Minors / legal capacity — OPEN.** Whether trustees, recipients,
   or account holders may be minors, and any capacity requirements, was not
   covered. **Resolving action:** decide alongside jurisdiction (1.1) and
@@ -344,26 +430,107 @@ provisional on 1.1)**
 
 ---
 
+## Area 11 — Manual verification & release (V1, per Area 0)
+
+### 11.1 Operator verification console — **DECIDED**
+- **Question:** How does the team verify aliveness/death manually?
+- **Decision:** An **operator console** that, for a flagged user, shows the
+  user's contacts **one at a time** on screen and provides a **note field**
+  to record outcome per contact and overall — with an explicit **state tag:
+  alive / deceased / accident** plus free text.
+- **Reason:** Fits founder/small-team manual handling at ≤100 customers.
+  Everything the operator does is written to the immutable audit log
+  (invariant 7): who viewed what, who recorded which finding, when.
+- **Boundary (⚠ invariant 6):** If a team member phones a contact, the
+  human may explain the *situation and process* but must **never read out
+  any release link, one-time code, or stored content.** Same rule as the
+  old automated call — it now binds the human operator.
+
+### 11.2 How many confirmations before an operator can start HOLD — **OPEN**
+- **Question:** The original spec required **3** independent confirmations
+  from **different groups** (invariant 4) before advancing. In manual mode,
+  what is the minimum the operator must log before starting a HOLD?
+- **Status:** **OPEN — must be decided before building the start-HOLD
+  action.** The Phase A answer described the console UI (11.1) but did not
+  set a number.
+- **⚠ Why this matters:** With verification now a human judgment, the
+  multi-party check in **invariant 4** is the main defense against a single
+  operator's error or a single false report. The 30-day HOLD (0.1) is the
+  backstop, but it should not be the *only* check. **Recommendation
+  (conservative):** require the operator to log **at least 2 independent
+  confirmations from different relationship groups** before HOLD can start,
+  preserving the spirit of invariant 4. Confirm or override this number.
+- **Resolving action:** Pick the minimum N and whether group-diversity is
+  enforced.
+
+### 11.3 Merged trustee/recipient roles + self-dealing guard — **DECIDED**
+- **Question:** A person may be both a confirmer and a recipient. May their
+  own confirmation count toward a release that delivers to themselves?
+- **Decision:** **Roles may merge, but a person's own death-confirmation
+  may NEVER count toward a release that delivers content to that same
+  person.** Their confirmation is excluded from the count for their own
+  delivery.
+- **Reason:** Removes the self-dealing incentive (the exact vector the
+  adversarial review calls out) while allowing the flexibility the user
+  wants. Enforced in code at confirmation-counting time.
+- **Depends on 11.2:** The exclusion rule plugs into whatever minimum-
+  confirmation count 11.2 settles on.
+
+### 11.4 The automated liveness/nudge core is unchanged — **DECIDED**
+- **Decision:** ACTIVE → NUDGE (user-only reminders) → operator-queue flag
+  → (manual verify) → HOLD → release remains the flow. **All eight states
+  and all seven invariants still apply.** NUDGE reminders use static
+  templates (3.4). VERIFYING is reinterpreted as operator-driven, not
+  automated calling; STALLED = operator could not verify and it still
+  never auto-advances toward release (invariant 5).
+- **Note for later phases:** Step 2's pure state machine still gets built
+  exactly as specified — the pivot changes *who/what fires the events*
+  (an operator action instead of an automated outreach result), not the
+  transition table or the invariants it enforces.
+
+---
+
 ## Summary of what is safe to build against now
 
+**Shape of V1 (Area 0):** No AI, no automated calling. Build the
+infrastructure — accounts, encrypted content, contact/recipient lists,
+liveness tracking, user-only NUDGE reminders (static templates), an
+operator console for manual verification, the deterministic HOLD window +
+one-tap cancel, and gated release delivery. Humans verify and decide;
+code enforces the timers, the cancel, and the audit log.
+
+- **HOLD is mandatory even in manual release (0.1)** — operator *starts*
+  it, 30-day window, one-tap cancel throughout; content releases only if
+  the window fully elapses. Invariants 1 & 3 preserved.
 - Company-held envelope encryption (8.1); manual, audited account recovery
   (8.2).
-- Trustee confirmation via signed link + separate-channel OTP + on-screen
-  re-consent (4.1), with the call never speaking link/code/content
-  (invariant 6).
-- Admin-assisted contact re-verification, logged (4.2).
+- Recipient release via gated page + separate-channel one-time code, 72h
+  expiry re-issuable (spec §2); no operator ever speaks a link/code/content
+  (invariant 6, now binding the human — 11.1).
+- Merged trustee/recipient roles with a self-dealing guard (11.3).
 - 30-day post-release retention then purge (5.1); soft-delete-then-hard
   for living users (5.2, N TBD); metadata-only audit log, 2 years (5.3).
 - Business-hours support + always-on tokenized self-serve cancel (6.1).
-- Pilot scale <1k, founder-run admin review, everything fails safe toward
-  delay (7.x).
-- Single vendor each behind the model adapters; Gemini-down → email-only +
-  flag; DeepSeek-down → hold outreach + flag (3.x).
+- Pilot scale ≤100–1,000 users, founder-run operator review, everything
+  fails safe toward delay (7.x).
+- No AI vendors in V1; NUDGE/cancel copy is static templates (3.4). The
+  `src/adapters/models/` hook may be scaffolded empty for later.
 
 ## Must be resolved before relying on them
 
-- **Jurisdiction (1.1)** — gates consent (1.3) and audit horizon (5.3).
-- **Trustee call consent (1.3)** — PROVISIONAL, conflicts with spec §4.
-- **Trustee=recipient (10.1)** — before quorum logic is built.
+- **Minimum confirmations before HOLD (11.2)** — OPEN; recommended ≥2 from
+  different groups. Decide before building the start-HOLD action.
+- **Jurisdiction (1.1)** — gates audit horizon (5.3) and light consent
+  check (1.3). No longer a hard V1 blocker now that automated calls are
+  gone.
 - **The two unset timers (10.3 soft-delete N, 10.4 recipient-fallback N)**
   — never introduce a timer the spec/decisions don't specify.
+- **Content model detail (9.1), minors/capacity (10.2)** — resolve in
+  Phase B/C.
+
+## Recommended doc follow-ups (flagged, not yet done)
+
+- Revise **PRODUCT_SPEC.md** §2/§6 wording from automated calling to
+  manual verification (states & invariants unchanged) — see 0.2.
+- Mark **CLAUDE.md** "Model and vendor split" as post-V1 — see 0.2 / 3.4.
+  I will not touch CLAUDE.md without your go-ahead.
