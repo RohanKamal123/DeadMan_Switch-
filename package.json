@@ -2,7 +2,7 @@
   "name": "legacy-vault",
   "version": "0.0.0",
   "private": true,
-  "description": "Legacy Vault — posthumous message delivery (V1, manual / no-AI). Phase C: core state machine, audit log, and Payload schema.",
+  "description": "Legacy Vault — posthumous message delivery (V1, manual / no-AI). Phase D: durable, tamper-evident audit store and state repositories over the Phase C core.",
   "license": "UNLICENSED",
   "scripts": {
     "build": "tsc -p tsconfig.json",

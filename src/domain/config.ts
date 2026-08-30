@@ -38,6 +38,14 @@ export const SOFT_DELETE_GRACE_DAYS = 7;
 /** Post-release retention before permanent purge (DECISIONS.md 5.1). */
 export const POST_RELEASE_RETENTION_DAYS = 30;
 
+/**
+ * Audit-log metadata retention horizon (DECISIONS.md 5.3: "metadata only,
+ * retained 2 years"). 730 days = 2 years. The horizon depends on the launch
+ * jurisdiction (1.1, Bangladesh) and is to be confirmed with counsel; change
+ * only by explicit decision, never silently.
+ */
+export const AUDIT_RETENTION_DAYS = 730;
+
 /** Quorum thresholds (DECISIONS.md 10.2; PRODUCT_SPEC.md invariant 4). */
 export const QUORUM_MIN_CONFIRMATIONS = 3;
 export const QUORUM_MIN_DISTINCT_GROUPS = 3;

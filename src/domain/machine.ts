@@ -3,7 +3,7 @@
 // state: on an accepted transition it swaps in the new context and appends the
 // audit entry (invariant 7). A rejected transition changes nothing.
 
-import { AuditLog } from './audit';
+import { AuditLog, type AuditSink } from './audit';
 import {
   initialMachine,
   transition,
@@ -17,13 +17,20 @@ export interface MachineOptions {
   readonly now?: number;
   readonly evidenceMode?: EvidenceMode;
   readonly publicReleaseEnabled?: boolean;
+  /**
+   * The audit destination. Defaults to a fresh in-memory `AuditLog`; Phase D
+   * injects the durable, tamper-evident store so every accepted transition is
+   * persisted immutably (invariant 7). The machine never bypasses it.
+   */
+  readonly audit?: AuditSink;
 }
 
 export class Machine {
   context: MachineContext;
-  readonly audit = new AuditLog();
+  readonly audit: AuditSink;
 
   constructor(options: MachineOptions = {}) {
+    this.audit = options.audit ?? new AuditLog();
     this.context = initialMachine({
       now: options.now ?? Date.now(),
       ...(options.evidenceMode !== undefined ? { evidenceMode: options.evidenceMode } : {}),
@@ -31,6 +38,19 @@ export class Machine {
         ? { publicReleaseEnabled: options.publicReleaseEnabled }
         : {}),
     });
+  }
+
+  /**
+   * Rebuild a machine resting in a persisted context (Phase D: state survives a
+   * restart). The snapshot is a value previously produced by `transition` and
+   * stored by a repository — restore never fabricates a state, it only reloads
+   * one, so the "no ad-hoc status writes" rule still holds: further changes go
+   * back through `apply` → `transition`.
+   */
+  static restore(context: MachineContext, options: { readonly audit?: AuditSink } = {}): Machine {
+    const machine = new Machine({ audit: options.audit });
+    machine.context = context;
+    return machine;
   }
 
   apply(event: Event): TransitionResult {
