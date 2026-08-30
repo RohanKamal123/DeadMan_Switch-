@@ -41,6 +41,17 @@ export interface ContactCase {
   viewCount: number;
 }
 
+/**
+ * A serializable snapshot of the operational case file (Phase D). This is the
+ * NON-audit store (DECISIONS.md 5.3): it holds working state tags and free-text
+ * notes, which must survive a restart but must never enter the immutable,
+ * metadata-only audit trail. Persisted by a repository, never by the audit sink.
+ */
+export interface CaseFileSnapshot {
+  readonly contacts: Readonly<Record<string, ContactCase>>;
+  readonly overall: { readonly state: ContactState | null; readonly notes: readonly CaseNote[] };
+}
+
 export interface OperatorConsoleOptions {
   readonly machine: Machine;
   readonly contacts: readonly Contact[];
@@ -91,6 +102,35 @@ export class OperatorConsole {
 
   overallState(): ContactState | null {
     return this.overall.state;
+  }
+
+  /**
+   * Export the operational case file for persistence (Phase D). A deep copy, so
+   * the snapshot cannot mutate the live case file or vice versa.
+   */
+  exportCaseFile(): CaseFileSnapshot {
+    const contacts: Record<string, ContactCase> = {};
+    for (const [id, c] of this.cases) {
+      contacts[id] = { state: c.state, notes: c.notes.map((n) => ({ ...n })), viewCount: c.viewCount };
+    }
+    return {
+      contacts,
+      overall: { state: this.overall.state, notes: this.overall.notes.map((n) => ({ ...n })) },
+    };
+  }
+
+  /**
+   * Rehydrate the operational case file from a persisted snapshot (Phase D:
+   * state survives a restart). Replaces the in-memory case file wholesale.
+   */
+  restoreCaseFile(snapshot: CaseFileSnapshot): void {
+    this.cases.clear();
+    for (const [id, c] of Object.entries(snapshot.contacts)) {
+      this.cases.set(id, { state: c.state, notes: c.notes.map((n) => ({ ...n })), viewCount: c.viewCount });
+    }
+    this.overall.state = snapshot.overall.state;
+    this.overall.notes.length = 0;
+    this.overall.notes.push(...snapshot.overall.notes.map((n) => ({ ...n })));
   }
 
   quorumMeter(): QuorumMeterView {

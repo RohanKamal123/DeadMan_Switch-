@@ -10,7 +10,7 @@
 // the returned signal (the content store lives at the edge). Payload ids are
 // never written to the trail — only counts.
 
-import type { AuditLog } from '../domain/audit';
+import type { AuditSink } from '../domain/audit';
 import { DAY_MS, POST_RELEASE_RETENTION_DAYS, SOFT_DELETE_GRACE_DAYS } from '../domain/config';
 
 export function purgeDueAt(finalReleaseAt: number): number {
@@ -37,7 +37,7 @@ export function canRecoverSoftDeleted(softDeletedAt: number, at: number): boolea
 export interface PurgeInput {
   readonly finalReleaseAt: number;
   readonly payloadIds: readonly string[];
-  readonly audit: AuditLog;
+  readonly audit: AuditSink;
   readonly at: number;
 }
 
@@ -62,7 +62,7 @@ export function purgeIfDue(input: PurgeInput): PurgeResult {
 export interface HardDeleteInput {
   readonly softDeletedAt: number;
   readonly payloadIds: readonly string[];
-  readonly audit: AuditLog;
+  readonly audit: AuditSink;
   readonly at: number;
 }
 

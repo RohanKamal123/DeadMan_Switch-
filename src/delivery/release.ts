@@ -20,7 +20,7 @@
 // reliability"). Once the active recipient accesses their content, the chain
 // stops advancing.
 
-import { AuditLog } from '../domain/audit';
+import type { AuditSink } from '../domain/audit';
 import { computeQuorum, type Confirmation } from '../domain/quorum';
 import { DAY_MS, POST_RELEASE_RETENTION_DAYS, RECIPIENT_FALLBACK_DAYS } from '../domain/config';
 import type { State } from '../domain/states';
@@ -56,6 +56,18 @@ export interface ReleaseStep {
   readonly messages: readonly DeliveryMessage[];
 }
 
+/**
+ * A serializable snapshot of delivery progress (Phase D). It holds the issued
+ * codes and link tokens because the controller must recognise a returning
+ * recipient's code across a restart — this is operational delivery state, not
+ * the audit trail, so it is kept in the delivery repository and NEVER written to
+ * the immutable, metadata-only audit log (DECISIONS.md 5.3; invariant 6/7).
+ */
+export interface DeliverySnapshot {
+  readonly records: readonly DeliveryRecord[];
+  readonly activeIndex: number;
+}
+
 export type AuthResult =
   | { readonly ok: true; readonly payloadIds: readonly string[] }
   | { readonly ok: false; readonly reason: string };
@@ -76,7 +88,7 @@ export interface ReleaseControllerOptions {
   readonly privateReleasedAt: number | null;
   readonly recipients: readonly ReleaseRecipient[];
   readonly confirmations: readonly Confirmation[];
-  readonly audit: AuditLog;
+  readonly audit: AuditSink;
   readonly codeGenerator?: () => string;
   readonly linkGenerator?: () => string;
 }
@@ -93,7 +105,7 @@ export class ReleaseController {
   private readonly privateReleasedAt: number | null;
   private readonly recipients: readonly ReleaseRecipient[];
   private readonly confirmations: readonly Confirmation[];
-  private readonly audit: AuditLog;
+  private readonly audit: AuditSink;
   private readonly genCode: () => string;
   private readonly genLink: () => string;
 
@@ -204,6 +216,35 @@ export class ReleaseController {
 
   records(): readonly DeliveryRecord[] {
     return this.recordList.map((r) => ({ ...r }));
+  }
+
+  /** Export delivery progress for persistence (Phase D). A deep copy. */
+  snapshot(): DeliverySnapshot {
+    return {
+      records: this.recordList.map((r) => ({ ...r, code: r.code === null ? null : { ...r.code } })),
+      activeIndex: this.activeIndex,
+    };
+  }
+
+  /**
+   * Rehydrate delivery progress from a persisted snapshot (Phase D). The
+   * snapshot's records replace the controller's own — used to reconstruct a
+   * controller after a restart so a recipient's already-issued code and link
+   * still authenticate. The snapshot must correspond to this controller's
+   * recipient list (same ids, same order).
+   */
+  restore(snapshot: DeliverySnapshot): void {
+    if (snapshot.records.length !== this.recordList.length) {
+      throw new Error('delivery snapshot does not match the recipient list length');
+    }
+    for (let i = 0; i < this.recordList.length; i++) {
+      const saved = snapshot.records[i]!;
+      if (saved.recipientId !== this.recordList[i]!.recipientId) {
+        throw new Error(`delivery snapshot recipient mismatch at index ${i}`);
+      }
+      this.recordList[i] = { ...saved, code: saved.code === null ? null : { ...saved.code } };
+    }
+    this.activeIndex = snapshot.activeIndex;
   }
 
   // --- internal -------------------------------------------------------------

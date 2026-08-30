@@ -384,25 +384,49 @@ Pure, in-memory, fully tested (`src/`, 139 tests, CI green). Delivered:
 HTTP surfaces, real vendor integrations, encryption implementation, auth. Those
 are the phases below.
 
-### Phase D — Durability & persistence — **NEXT**
-- **Append-only audit store (invariant 7).** The log is an in-memory array
-  today; move it to durable, tamper-evident storage. Nothing is trustworthy
-  until this exists — highest priority. Metadata-only, retained 2 years (5.3).
-- **State repositories.** Persist accounts, machine context, confirmations,
-  payloads, operator case files, and delivery records so state survives a
-  restart. Domain stays pure; repositories sit behind it.
-- Must preserve: no ad-hoc status writes (all state changes still go through
-  `transition`), and the content/audit separation (5.3).
+### Phase D — Durability & persistence — **DONE**
+`src/persistence/` (23 tests, CI green). Delivered:
+- **Append-only, tamper-evident audit store (invariant 7).** `HashChainedAuditStore`
+  satisfies the domain `AuditSink` interface, so it drops in wherever the
+  in-memory `AuditLog` was used. Every record carries `hash = H(prevHash · record)`
+  — a hash chain, so any edit, deletion, or reorder breaks the chain and is
+  detected on load (`AuditIntegrityError`) or by `verify()`; a broken chain is
+  refused, never silently trusted. Durability rides on an `AppendOnlySink`
+  (in-memory for tests, JSONL file for production). Metadata-only is enforced at
+  the boundary exactly as before (`assertMetadataSafe`). Retention horizon =
+  **2 years** (`AUDIT_RETENTION_DAYS`, 5.3), exposed as a query; execution of a
+  prune is a Phase E scheduler concern.
+- **State repositories.** Snapshot repositories over a `KeyValueStore`
+  (in-memory / JSON file) for accounts, machine context (which carries
+  confirmations), payloads, operator case files, and delivery records — all
+  survive a restart. `MachineRepository.load` rebuilds a `Machine` via
+  `Machine.restore`; further changes still go back through `apply` → `transition`.
+- **Preserved:** no ad-hoc status writes (a repository only persists/reloads a
+  context `transition` produced — it has no method that sets a state), and the
+  content/audit separation (operational data — notes, codes, links — lives in
+  the KV repositories, never in the append-only trail).
 
-### Phase E — Runtime & scheduler
-- **The worker that fires time events** — `MISSED_CHECK_IN` (day 7),
-  `REACH_VERIFYING` (day 30), the release trigger after a HOLD fully elapses,
-  the weekly health check, and the HOLD/NUDGE cadence sends. The guards already
-  make an early release impossible; the worker's job is reliability so a
-  release is never *late* by accident (the cheap failure, still worth avoiding).
-- **Cadence senders** — wire `src/notifications/` schedules to the channels.
-- Fail-safe: a worker outage must never advance toward release (invariant 5,
-  7.3); on restart it re-derives due timers from persisted state.
+### Phase E — Runtime & scheduler — **DONE**
+`src/runtime/` (26 tests, CI green). Delivered:
+- **The worker that fires time events** — `Scheduler.tickAccount` advances
+  `MISSED_CHECK_IN` (day 7), `REACH_VERIFYING` (day 30), the private release
+  after a HOLD fully elapses, and public release after the 14-day gap. A pure
+  `nextDueEvent(context, now)` planner decides what is due; the worker applies it
+  through `machine.apply` → `transition` only (no ad-hoc status writes), so every
+  guard still holds and the worker can never release early.
+- **Weekly health check** — `Scheduler.tickHealth` runs the dependency probers
+  weekly (§6), feeds the result into every account's dependency-health gate (veto
+  path 3 blocks entry to VERIFYING / starting a HOLD on a broken stack), and
+  alerts the team on failures.
+- **Cadence senders** — `src/notifications/` schedules are wired to channels
+  through a `ReminderSender`; NUDGE and HOLD cancel prompts are rendered from the
+  static templates (no link/code — invariant 6) and sent once, tracked by a
+  per-account tick cursor.
+- **Fail-safe (invariant 5; 7.3)** — the planner never proposes an event out of
+  VERIFYING or STALLED (those are human-gated), and a rejected transition stops
+  the advance loop and leaves the account where it was. A worker outage only
+  DELAYS events; on restart the scheduler re-derives every due timer from the
+  Phase D persisted state and catches up one guarded step at a time.
 
 ### Phase F — Surfaces & API
 - **Cancel-link endpoint + page first** (6.1) — the highest-SLO surface; the

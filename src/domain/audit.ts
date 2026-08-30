@@ -75,7 +75,21 @@ export function assertMetadataSafe(metadata: Metadata): void {
   }
 }
 
-export class AuditLog {
+/**
+ * The append-only, metadata-only audit contract (invariant 7). Every place
+ * that logs — the machine, the console, the delivery engine, retention — depends
+ * on this interface, never on a concrete class, so the in-memory `AuditLog` and
+ * the durable, tamper-evident store in `src/persistence` are interchangeable
+ * behind it. There is no `delete`, `update`, or `clear`: the trail only grows.
+ */
+export interface AuditSink {
+  append(input: AuditEntryInput): AuditEntry;
+  /** A frozen snapshot; the returned array cannot mutate the log. */
+  all(): readonly AuditEntry[];
+  readonly length: number;
+}
+
+export class AuditLog implements AuditSink {
   private readonly entries: AuditEntry[] = [];
 
   append(input: AuditEntryInput): AuditEntry {
