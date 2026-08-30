@@ -1,10 +1,12 @@
-# Legacy Vault — Phase C: the state machine
+# Legacy Vault — Phase C
 
-Posthumous message delivery (V1, manual / no-AI). This phase implements the
-core the rest of the product is built on: the **eight-state machine**, the
-**immutable audit log**, and the **`Payload` content schema** — written
-tests-first, because everything here touches the release path where *being
-wrong is worse than being slow*.
+Posthumous message delivery (V1, manual / no-AI). Phase C implements the whole
+death path in code: the **eight-state machine** and its **immutable audit log**,
+the **`Payload` content schema**, the **operator console** that fires the
+machine's events, the **release-delivery engine**, the **notification cadence**,
+the **no-login cancel link**, the **weekly health check**, and the **retention
+lifecycle** — all written tests-first, because everything here touches the
+release path where *being wrong is worse than being slow*.
 
 Read `PRODUCT_SPEC.md` (behaviour + invariants), `DECISIONS.md` (why), and
 `CLAUDE.md` (the one rule + invariants) before changing anything.
@@ -28,6 +30,15 @@ src/delivery/
   codes.ts       # one-time codes: 72h expiry, single-value match
   messages.ts    # channel message shapes: email=link only, sms=code only
   release.ts     # ReleaseController: ordered delivery, fallback, gated access
+src/notifications/
+  cadence.ts     # NUDGE (7/14/21) + HOLD cancel-prompt schedules
+  templates.ts   # static, human-written copy (no runtime language)
+src/cancel/
+  token.ts       # signed, single-purpose, no-login cancel link
+src/health/
+  health.ts      # weekly email/SMS/storage check; gates VERIFYING (veto 3)
+src/retention/
+  retention.ts   # 30-day post-release purge; 7-day soft-delete grace
 src/adapters/models/   # empty by design — no AI/model dependency in V1
 tests/                 # tests-first suite; one file per invariant + units
 ```
@@ -93,6 +104,24 @@ elapsed with no cancel — enforced upstream). `ReleaseController`:
 Code and link generators are injected (deterministic in tests); public-release
 publishing to the user-designated destination is a separate destination step
 and is not part of this gated-delivery module.
+
+## Notifications, cancel link, health, retention
+
+- **`src/notifications/`** — the cadence (NUDGE day 7/14/21; HOLD cancel prompts
+  on days 1/7/14/19/20/21, plus 25/28/29/30 in lenient mode) and the static,
+  human-written templates (DECISIONS 3.1). No copy is generated at runtime, no
+  template asserts the user has died, NUDGE copy states no one else was
+  contacted, and no template embeds a URL or code.
+- **`src/cancel/`** — the signed, single-purpose, no-login cancel token
+  (DECISIONS 6.1). HMAC-signed; a bad token fails safe (never a crash, never a
+  state change); redeeming a valid one cancels from any state. No expiry — a
+  living user must always be able to stop, and a leaked token can only cancel.
+- **`src/health/`** — the weekly email/SMS/storage check (§6). A failing (or
+  throwing) probe marks the machine unhealthy and blocks entry to VERIFYING
+  (veto path 3) until a later healthy check clears it.
+- **`src/retention/`** — schedules and audited, metadata-only purge helpers:
+  30-day post-release purge (5.1) and 7-day soft-delete grace before hard delete
+  (5.2). A purge never touches the audit trail; only counts are logged.
 
 ## Deferred / config, not invented
 
