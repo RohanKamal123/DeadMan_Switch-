@@ -65,9 +65,19 @@ from the JSON file named by `LV_CONFIG_FILE`; see `config.example.json`. The
 policy values arrive as config, never invented in code (CLAUDE.md). `SIGINT`/
 `SIGTERM` stops the scheduler and closes both ports cleanly.
 
+The KMS master key is a **key ring** with overlapping validity (G2.1): set
+`LV_KMS_MASTER_KEY` to the current key and, during a rotation, list the retired
+keys in `LV_KMS_MASTER_KEY_PREVIOUS` (comma-separated hex). New content is wrapped
+under the current key; content already sealed under an older key keeps opening
+because that key stays in the ring — so rotating never strands stored content
+(re-wrap only, never re-encryption). Once every stored envelope has been re-wrapped
+to the current key, the retired key can be dropped from `LV_KMS_MASTER_KEY_PREVIOUS`.
+
 Not yet production-ready from this entrypoint: the public-release publisher is an
-in-memory stand-in (§PUBLIC_RELEASE destination unwired), the KMS is the local
-dev wrapper (G2.1), and there is no UI for the user/operator/admin JSON APIs.
+in-memory stand-in (§PUBLIC_RELEASE destination unwired), the KMS wrapper is a
+local AES key ring rather than a cloud KMS (a cloud adapter implements the same
+`KeyWrapper` and drops into the composition root unchanged), and there is no UI
+for the user/operator/admin JSON APIs.
 
 ## Layout
 

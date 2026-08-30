@@ -300,10 +300,20 @@ gives them a transport.
   rest, access logging, admin-revocable access — are unchanged from 8.1.
   The recipient page (F4) decrypts **per view, server-side**, and logs the
   access (metadata only).
-- **G2.1 — OPEN:** the KMS provider and master-key rotation cadence are
-  deployment config (rotation must be possible without re-encrypting
-  content — envelope re-wrap only). Not a V1 blocker; the interface assumes
-  rotation is possible.
+- **G2.1 — rotation MECHANISM built; provider + cadence remain deployment
+  config.** The wrapping authority is a **master-key ring with overlapping
+  validity** (`KeyRingWrapper`, `src/adapters/crypto/envelope.ts`), mirroring
+  the cancel-secret rotation model (G4): the current key wraps, every key in the
+  ring can unwrap, and each envelope records the `kmsKeyId` fingerprint of the
+  key that wrapped it. Rotating the master key therefore **never strands stored
+  content** — it is **re-wrap only, never re-encryption**: `EnvelopeCrypto.rewrap`
+  re-keys an envelope's wrapped data key under the current key while leaving the
+  ciphertext untouched, so a retired key can be dropped from the ring once every
+  envelope has been re-wrapped. The keys arrive from the environment
+  (`LV_KMS_MASTER_KEY` current, `LV_KMS_MASTER_KEY_PREVIOUS` retired). Still
+  deployment config: the **KMS provider** (a cloud-KMS adapter implements the
+  same `KeyWrapper` and drops into the composition root unchanged) and the
+  **rotation cadence**.
 
 ## G3. Auth, operator identity, and manual recovery — **DECIDED**
 
@@ -379,7 +389,9 @@ piece:
   HTTP email) and wired behind the ports; only the credentials/endpoints remain
   deployment config. The 1.1 cross-border check stays a deployment decision
   (self-hosted storage; email endpoint chosen by config).
-- **G2.1** — KMS provider + master-key rotation cadence. Deployment config.
+- **G2.1** — KMS provider + master-key rotation cadence. **Rotation mechanism
+  built** (`KeyRingWrapper` overlapping validity + `EnvelopeCrypto.rewrap`); only
+  the provider choice and cadence remain deployment config.
 - **G5 / 11.5** — content size limits (`ContentPolicy`). Deployment config.
 - **2.3 / 11.2** — automated dormancy/lapse policy. Still deferred to
   post-pilot; intersects billing, not F/G directly.

@@ -74,7 +74,7 @@ describe('composition (wired servers)', () => {
       cursors: new InMemoryKeyValueStore(),
       credentials: creds,
       auditFor,
-      secrets: { cancelTokenSecrets: ['cancel-secret'], sessionSecret: 'sess', kmsMasterKey: randomBytes(32) },
+      secrets: { cancelTokenSecrets: ['cancel-secret'], sessionSecret: 'sess', kmsKeyRing: [randomBytes(32)] },
       channels: { email: new InMemoryEmailAdapter(), sms: new InMemorySmsAdapter(), push: new InMemoryPushAdapter(), storage: new InMemoryStorageAdapter() },
       publisher: new InMemoryPublicPublisher(),
       contentPolicy: POLICY,
@@ -143,7 +143,7 @@ describe('composition (wired servers)', () => {
 
     const config: AppConfig = {
       state: s, cursors: new InMemoryKeyValueStore(), credentials: new InMemoryKeyValueStore(), auditFor,
-      secrets: { cancelTokenSecrets: ['c'], sessionSecret: 's', kmsMasterKey: randomBytes(32) },
+      secrets: { cancelTokenSecrets: ['c'], sessionSecret: 's', kmsKeyRing: [randomBytes(32)] },
       channels: { email: new InMemoryEmailAdapter(), sms: new InMemorySmsAdapter(), push: new InMemoryPushAdapter(), storage: new InMemoryStorageAdapter() },
       publisher: new InMemoryPublicPublisher(), contentPolicy: POLICY, recipientAccessPolicy: ACCESS_POLICY, schedulerIntervalMs: 60_000, sessionTtlMs: 1000, opsEmail: 'o@t.test',
       gatedBaseUrl: 'https://app.test/release', cancelFallback: {}, now: () => 1000,

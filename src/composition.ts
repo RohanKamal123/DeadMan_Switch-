@@ -11,7 +11,7 @@
 // here is hard-coded.
 
 import { randomBytes, randomInt } from 'node:crypto';
-import { EnvelopeCrypto, LocalKeyWrapper } from './adapters/crypto';
+import { EnvelopeCrypto, KeyRingWrapper } from './adapters/crypto';
 import { CredentialStore, SessionAuthenticator, AuthService } from './adapters/auth';
 import type { Channels, PublicPublisher } from './adapters/channels';
 import { ChannelAlertSender, ChannelReminderSender, dependencyProbers } from './adapters/channels';
@@ -108,7 +108,10 @@ export function buildServices(config: AppConfig): Services {
   const recipientOrders = new RecipientOrderRepository(config.state);
   const { auditFor, secrets, channels } = config;
 
-  const crypto = new EnvelopeCrypto(new LocalKeyWrapper({ keyId: 'kms-primary', masterKey: secrets.kmsMasterKey }));
+  // KeyRingWrapper gives master-key rotation with overlapping validity (G2.1):
+  // wrap under the current key, unwrap against every key in the ring. A real
+  // cloud-KMS adapter implements the same KeyWrapper and drops in here unchanged.
+  const crypto = new EnvelopeCrypto(new KeyRingWrapper(secrets.kmsKeyRing));
 
   // Crypto-secure generators for the recipient release capability tokens. The
   // gated link + one-time code are the ONLY thing standing between an attacker
