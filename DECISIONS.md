@@ -471,9 +471,21 @@ the highest-SLO surface first. In brief:
     the operator auth policy; a rejected action is a 409, never a silent
     success; the audited operator id is the authenticated principal's, not a
     client field. +16 tests.
-  - Still to build in F: people & authoring services (F2, F6), the recipient
-    gated page (F4), the admin surface (freeze/audit/recovery), and the
-    cancel-SLO metrics (F7).
+  - *Recipient gated page (F4)* — `ReleaseService` drives the existing
+    private-release engine over persisted state: `begin` builds the ordered
+    recipient plan from the roster + payload addressing (ordering is user-
+    defined per §7, so it is RECEIVED, never derived) and activates the first
+    recipient; `authenticate`/`reissueByLink` reconstruct the controller from
+    the persisted plan + delivery snapshot so a returning recipient works after
+    a restart; `advanceFallback` handles 14-day silence (11.4). A new
+    `ReleasePlanRepository` holds the ordered plan. `handleRecipient` is the
+    gated page with NO auth seam (link + separate-channel code is the F3
+    exception): the code travels only in a POST body, access is allowed only
+    while the account is in a release state (a later cancel denies it), every
+    access is logged as metadata only (invariant 6/7), and no page shows
+    content, the code, or a recipient id. +14 tests.
+  - Still to build in F: people & authoring services (F2, F6), the admin
+    surface (freeze/audit/recovery), and the cancel-SLO metrics (F7).
 
 ### Phase G — Integrations & security — **DECISIONS SETTLED** (`DECISIONS_PHASE_F_G.md`)
 Architecture and product decisions for this phase are settled in

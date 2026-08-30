@@ -11,3 +11,4 @@ export * from './principal';
 export * from './cancel-service';
 export * from './liveness-service';
 export * from './operator-service';
+export * from './release-service';

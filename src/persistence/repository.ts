@@ -23,7 +23,7 @@ import type { EvidenceMode } from '../domain/states';
 import type { Payload } from '../domain/payload';
 import type { Contact } from '../console/contacts';
 import type { CaseFileSnapshot } from '../console/console';
-import type { DeliverySnapshot } from '../delivery/release';
+import type { DeliverySnapshot, ReleaseRecipient } from '../delivery/release';
 import type { KeyValueStore } from './kv';
 
 /**
@@ -206,5 +206,26 @@ export class CaseFileRepository extends SnapshotRepository<CaseFileSnapshot> {
 export class DeliveryRepository extends SnapshotRepository<DeliverySnapshot> {
   constructor(store: KeyValueStore) {
     super(store, 'delivery');
+  }
+}
+
+// --- release plan (per account) ---------------------------------------------
+
+/**
+ * The ordered recipient plan a release runs against. Ordering is strictly
+ * user-defined (PRODUCT_SPEC.md §7: "No randomization anywhere in the death
+ * path"), so it is captured here as data — the release engine never derives an
+ * order. Held apart from the `DeliverySnapshot` (which carries the live
+ * per-recipient progress, including issued codes and link tokens), so a returning
+ * recipient can be authenticated after a restart by reconstructing the controller
+ * from plan + snapshot. This is operational delivery state, never the audit trail.
+ */
+export interface ReleasePlan {
+  readonly recipients: readonly ReleaseRecipient[];
+}
+
+export class ReleasePlanRepository extends SnapshotRepository<ReleasePlan> {
+  constructor(store: KeyValueStore) {
+    super(store, 'release-plan');
   }
 }

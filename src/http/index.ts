@@ -7,8 +7,10 @@
 
 export * from './message';
 export * from './pages';
+export * from './recipient-pages';
 export * from './auth';
 export * from './cancel-handler';
 export * from './checkin-handler';
 export * from './operator-handler';
+export * from './recipient-handler';
 export * from './server';
