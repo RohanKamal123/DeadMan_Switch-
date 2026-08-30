@@ -460,8 +460,20 @@ the highest-SLO surface first. In brief:
     ownership (a user checks in only their own account). +22 tests.
   - *Node adapter* — a generic `createNodeServer(route)`; `createCancelServer`
     stays a dedicated build with no vendor-adapter import path (F1.4).
-  - Still to build in F: people & authoring services, operator-console
-    endpoints, the recipient gated page (F4), and the cancel-SLO metrics (F7).
+  - *Operator-console endpoints (F2)* — `OperatorService` loads the machine +
+    roster + operational case file from the Phase D repositories, drives the
+    existing `OperatorConsole`, and persists both the machine snapshot and the
+    case file; it adds no logic, so the console/domain guardrails still hold
+    (group read from roster → invariant 4 unfakeable, consent/stale gates,
+    START_HOLD blocked until quorum, STALLED never advances → invariant 5, all
+    logged → invariant 7). `handleOperator` exposes the verification workflow
+    (view/state/note, confirm/withdraw, hold/stalled/reopen, case read) behind
+    the operator auth policy; a rejected action is a 409, never a silent
+    success; the audited operator id is the authenticated principal's, not a
+    client field. +16 tests.
+  - Still to build in F: people & authoring services (F2, F6), the recipient
+    gated page (F4), the admin surface (freeze/audit/recovery), and the
+    cancel-SLO metrics (F7).
 
 ### Phase G — Integrations & security — **DECISIONS SETTLED** (`DECISIONS_PHASE_F_G.md`)
 Architecture and product decisions for this phase are settled in

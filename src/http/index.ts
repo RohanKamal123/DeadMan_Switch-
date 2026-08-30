@@ -10,4 +10,5 @@ export * from './pages';
 export * from './auth';
 export * from './cancel-handler';
 export * from './checkin-handler';
+export * from './operator-handler';
 export * from './server';
