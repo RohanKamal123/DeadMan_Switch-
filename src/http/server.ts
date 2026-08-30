@@ -13,10 +13,16 @@
 import * as http from 'node:http';
 import { handleCancel, type CancelHandlerDeps } from './cancel-handler';
 import type { HttpRequest, HttpResponse } from './message';
+import type { RequestMetrics } from './metrics';
 
 const MAX_BODY_BYTES = 16 * 1024; // request bodies here are small (a token, a tiny JSON); cap to shed abuse.
 
 export type Route = (req: HttpRequest) => HttpResponse;
+
+export interface NodeServerOptions {
+  /** Optional SLO metrics sink (F7). Receives path/method/status/duration only. */
+  readonly metrics?: RequestMetrics;
+}
 
 function readBody(req: http.IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -47,9 +53,11 @@ function flattenHeaders(raw: http.IncomingHttpHeaders): Record<string, string> {
 }
 
 /** Wrap a pure route in a Node server. Does not start it — call `.listen(...)`. */
-export function createNodeServer(route: Route): http.Server {
+export function createNodeServer(route: Route, options: NodeServerOptions = {}): http.Server {
+  const metrics = options.metrics;
   return http.createServer((req, res) => {
     void (async () => {
+      const startedAt = Date.now();
       const url = new URL(req.url ?? '/', 'http://localhost');
       const query: Record<string, string> = {};
       for (const [key, value] of url.searchParams) query[key] = value;
@@ -86,11 +94,21 @@ export function createNodeServer(route: Route): http.Server {
       }
       res.writeHead(response.status, { ...response.headers });
       res.end(response.body);
+      if (metrics !== undefined) {
+        // Pathname only — never the query string (which carries the cancel token).
+        metrics.record({
+          path: url.pathname,
+          method: req.method ?? 'GET',
+          status: response.status,
+          durationMs: Date.now() - startedAt,
+          at: startedAt,
+        });
+      }
     })();
   });
 }
 
 /** A server dedicated to the cancel surface (its own failure domain, F1.4). */
-export function createCancelServer(deps: CancelHandlerDeps): http.Server {
-  return createNodeServer((req) => handleCancel(req, deps));
+export function createCancelServer(deps: CancelHandlerDeps, options: NodeServerOptions = {}): http.Server {
+  return createNodeServer((req) => handleCancel(req, deps), options);
 }

@@ -14,3 +14,4 @@ export * from './operator-service';
 export * from './release-service';
 export * from './people-service';
 export * from './authoring-service';
+export * from './admin-service';

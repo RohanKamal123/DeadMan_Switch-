@@ -123,6 +123,15 @@ export class ReleaseService {
     return result;
   }
 
+  /** Admin revocation of a recipient's access (§7, UX §3.8). Logged, and denies further access. */
+  revoke(accountId: string, recipientId: string, adminId: string, at: number): { ok: boolean; reason?: string } {
+    const loaded = this.reconstruct(accountId);
+    if (loaded === undefined) return { ok: false, reason: 'no active release' };
+    const result = loaded.controller.revoke(recipientId, adminId, at);
+    this.deliveries.save(accountId, loaded.controller.snapshot());
+    return result;
+  }
+
   /** Fallback after 14 days of recipient silence (11.4): activate the next in order. */
   advanceFallback(accountId: string, at: number): FallbackResult {
     const loaded = this.reconstruct(accountId);

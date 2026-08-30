@@ -6,6 +6,7 @@
 // and isolated because it is the product's highest-SLO path (DECISIONS.md 6.1).
 
 export * from './message';
+export * from './metrics';
 export * from './pages';
 export * from './recipient-pages';
 export * from './auth';
@@ -14,4 +15,5 @@ export * from './checkin-handler';
 export * from './operator-handler';
 export * from './recipient-handler';
 export * from './user-handler';
+export * from './admin-handler';
 export * from './server';

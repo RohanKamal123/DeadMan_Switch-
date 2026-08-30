@@ -494,8 +494,19 @@ the highest-SLO surface first. In brief:
     as ciphertext only, and addressed only to enrolled recipients. `handleUser`
     exposes `/me/*` behind the user auth seam, acting only on the caller's own
     account (no accountId in the body → no cross-account access). +19 tests.
-  - Still to build in F: the admin surface (freeze/audit/recovery) and the
-    cancel-SLO metrics (F7).
+  - *Admin surface (F2; veto path 4)* — `AdminService` freeze/unfreeze (through
+    the guarded transition; a frozen account cannot enter VERIFYING or start a
+    HOLD — fail-safe, so no window needed) and release-access revocation
+    (through the release engine), each attributed to the authenticated admin and
+    audited (invariant 7). `handleAdmin` exposes them behind the admin auth
+    policy.
+  - *Cancel-SLO metrics (F7)* — the Node server records one operational metric
+    per request (path/method/status/duration), never the query string (which
+    carries the cancel token) and never a code/content/account id. A production
+    sink ships these to the ops alerting path.
+  - **Phase F is code-complete:** all four audiences (user app, operator
+    console, recipient page, admin) plus the cancel surface are built behind the
+    application-service tier, tested; no surface writes state directly.
 
 ### Phase G — Integrations & security — **DECISIONS SETTLED** (`DECISIONS_PHASE_F_G.md`)
 Architecture and product decisions for this phase are settled in
