@@ -24,6 +24,10 @@ src/console/
   contacts.ts    # contact roster: roles, groups, consent, stale flag
   quorum-meter.ts# read-models: quorum meter, hold readiness, self-dealing
   console.ts     # OperatorConsole: fires machine events with UI guardrails
+src/delivery/
+  codes.ts       # one-time codes: 72h expiry, single-value match
+  messages.ts    # channel message shapes: email=link only, sms=code only
+  release.ts     # ReleaseController: ordered delivery, fallback, gated access
 src/adapters/models/   # empty by design — no AI/model dependency in V1
 tests/                 # tests-first suite; one file per invariant + units
 ```
@@ -68,6 +72,27 @@ top of the machine:
   console records outcomes, not messages (invariant 6);
 - free-text notes live in the operational case file; the audit log gets
   **metadata only** (invariant 7 / 5.3).
+
+## Release delivery (`src/delivery/`)
+
+Runs only once the machine is in `PRIVATE_RELEASE` (the HOLD window fully
+elapsed with no cancel — enforced upstream). `ReleaseController`:
+
+- delivers to recipients in **strict user order**, no randomisation (§7);
+- **skips a self-dealing recipient** — one whose own confirmation was needed
+  for quorum (10.3), recomputed with their confirmation excluded;
+- issues an **email (gated link) + SMS (one-time code) on separate channels**;
+  the message *shapes* make invariant 6 structural — an email has no field that
+  could carry a code or content, an SMS none that could carry a link. Content
+  is revealed only at the gated page after **both** are presented;
+- **falls back to the next recipient after 14 days of silence** (11.4), and
+  stops advancing once the active recipient has accessed their content;
+- **re-issues an expired code within the 30-day retention window** (5.1);
+- logs every access as **metadata only** and honours **admin revocation**.
+
+Code and link generators are injected (deterministic in tests); public-release
+publishing to the user-designated destination is a separate destination step
+and is not part of this gated-delivery module.
 
 ## Deferred / config, not invented
 
