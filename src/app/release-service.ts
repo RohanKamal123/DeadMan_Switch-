@@ -24,9 +24,12 @@ import {
   ReleaseController,
   type AuthResult,
   type DeliveryMessage,
+  type RecipientAccessPolicy,
   type ReissueResult,
   type ReleaseRecipient,
 } from '../delivery';
+import type { EnvelopeCrypto } from '../adapters/crypto';
+import type { ContentKind, Payload } from '../domain/payload';
 import type { MachineContext } from '../domain/transition';
 import type {
   ContactRepository,
@@ -47,6 +50,16 @@ export interface ReleaseServiceOptions {
   readonly auditFor: AuditSinkFactory;
   readonly codeGenerator?: () => string;
   readonly linkGenerator?: () => string;
+  /** Deployment attempt cap / re-issue throttle for the gated page (F4.1). */
+  readonly accessPolicy?: RecipientAccessPolicy;
+  /**
+   * Envelope crypto for rendering the recipient page (G2). The page decrypts
+   * PER VIEW, server-side (DECISIONS_PHASE_F_G.md F4/G2) — the data key is
+   * unwrapped only while a view is being served, and plaintext never leaves this
+   * process except as the rendered page bytes. Optional: without it the gated
+   * page reveals only that items are present, not their content.
+   */
+  readonly crypto?: EnvelopeCrypto;
 }
 
 export type BeginResult =
@@ -54,6 +67,22 @@ export type BeginResult =
   | { readonly ok: false; readonly reason: string };
 
 export type FallbackResult = { readonly messages: readonly DeliveryMessage[] };
+
+/**
+ * One decrypted content item, ready to render on the gated page. `content` is
+ * the decrypted payload: UTF-8 text for a note, base64 for binary (photo/pdf).
+ * `available` is false when the item could not be decrypted (wrong key, tampered
+ * ciphertext, or no crypto configured) — the page then shows the item is present
+ * but withholds its body rather than crashing or leaking (fail safe).
+ */
+export interface ReleasedItem {
+  readonly id: string;
+  readonly kind: ContentKind;
+  readonly mimeType: string;
+  readonly encoding: 'utf8' | 'base64';
+  readonly content: string | null;
+  readonly available: boolean;
+}
 
 function isReleaseState(ctx: MachineContext): boolean {
   return ctx.state === 'PRIVATE_RELEASE' || ctx.state === 'PUBLIC_RELEASE';
@@ -68,6 +97,8 @@ export class ReleaseService {
   private readonly auditFor: AuditSinkFactory;
   private readonly codeGenerator: (() => string) | undefined;
   private readonly linkGenerator: (() => string) | undefined;
+  private readonly accessPolicy: RecipientAccessPolicy | undefined;
+  private readonly crypto: EnvelopeCrypto | undefined;
 
   constructor(options: ReleaseServiceOptions) {
     this.machines = options.machines;
@@ -78,6 +109,8 @@ export class ReleaseService {
     this.auditFor = options.auditFor;
     this.codeGenerator = options.codeGenerator;
     this.linkGenerator = options.linkGenerator;
+    this.accessPolicy = options.accessPolicy;
+    this.crypto = options.crypto;
   }
 
   /**
@@ -110,6 +143,41 @@ export class ReleaseService {
     const result = loaded.controller.authenticate(linkToken, code, at);
     this.deliveries.save(accountId, loaded.controller.snapshot());
     return result;
+  }
+
+  /**
+   * The addressed content for a set of payload ids, decrypted for rendering
+   * (G2). A pure READ — it mutates nothing and writes no audit entry (the access
+   * was already logged by `authenticate`). Decryption is per view, server-side:
+   * the data key is unwrapped here and the plaintext is handed straight to the
+   * caller for rendering; it is never persisted. An item that cannot be
+   * decrypted (wrong key, tampered ciphertext) or that is missing is returned
+   * `available: false` with no body — the page degrades, it never crashes or
+   * leaks. Order follows the account's stored payloads.
+   */
+  contentView(accountId: string, payloadIds: readonly string[]): readonly ReleasedItem[] {
+    const wanted = new Set(payloadIds);
+    const items: ReleasedItem[] = [];
+    for (const payload of this.payloads.forAccount(accountId)) {
+      if (!wanted.has(payload.id)) continue;
+      items.push(this.decryptForView(payload));
+    }
+    return items;
+  }
+
+  private decryptForView(payload: Payload): ReleasedItem {
+    const encoding: 'utf8' | 'base64' = payload.kind === 'note' ? 'utf8' : 'base64';
+    const base = { id: payload.id, kind: payload.kind, mimeType: payload.mimeType, encoding };
+    if (this.crypto === undefined) {
+      return { ...base, content: null, available: false };
+    }
+    try {
+      const plaintext = this.crypto.open(payload.envelope);
+      return { ...base, content: plaintext.toString(encoding), available: true };
+    } catch {
+      // Wrong key or tampered ciphertext: withhold the body, never crash or leak.
+      return { ...base, content: null, available: false };
+    }
   }
 
   /** Re-issue a fresh code to the recipient identified by their gated link (72h, within retention). */
@@ -173,6 +241,7 @@ export class ReleaseService {
       audit: this.auditFor(accountId),
       ...(this.codeGenerator !== undefined ? { codeGenerator: this.codeGenerator } : {}),
       ...(this.linkGenerator !== undefined ? { linkGenerator: this.linkGenerator } : {}),
+      ...(this.accessPolicy !== undefined ? { accessPolicy: this.accessPolicy } : {}),
     });
   }
 

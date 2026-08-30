@@ -109,7 +109,28 @@ describe('secretsFromEnv (G4)', () => {
       LV_KMS_MASTER_KEY: 'a'.repeat(64),
     } as NodeJS.ProcessEnv);
     expect(secrets.cancelTokenSecrets).toEqual(['current', 'old1', 'old2']);
-    expect(secrets.kmsMasterKey).toHaveLength(32);
+    expect(secrets.kmsKeyRing).toHaveLength(1);
+    expect(secrets.kmsKeyRing[0]).toHaveLength(32);
+  });
+  it('loads a KMS key ring with previous keys for rotation (current first)', () => {
+    const secrets = secretsFromEnv({
+      LV_CANCEL_SECRET: 'current',
+      LV_SESSION_SECRET: 'sess',
+      LV_KMS_MASTER_KEY: 'a'.repeat(64),
+      LV_KMS_MASTER_KEY_PREVIOUS: `${'b'.repeat(64)}, ${'c'.repeat(64)}`,
+    } as NodeJS.ProcessEnv);
+    expect(secrets.kmsKeyRing).toHaveLength(3);
+    expect(secrets.kmsKeyRing[0]).toEqual(Buffer.alloc(32, 0xaa));
+    expect(secrets.kmsKeyRing[1]).toEqual(Buffer.alloc(32, 0xbb));
+  });
+  it('throws when the KMS master key is not 32 bytes', () => {
+    expect(() =>
+      secretsFromEnv({
+        LV_CANCEL_SECRET: 'c',
+        LV_SESSION_SECRET: 's',
+        LV_KMS_MASTER_KEY: 'a'.repeat(30),
+      } as NodeJS.ProcessEnv),
+    ).toThrow(MissingSecretError);
   });
   it('throws when a required secret is missing', () => {
     expect(() => secretsFromEnv({} as NodeJS.ProcessEnv)).toThrow(MissingSecretError);

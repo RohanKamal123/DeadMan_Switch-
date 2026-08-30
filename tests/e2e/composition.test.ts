@@ -30,6 +30,8 @@ const POLICY: ContentPolicy = {
   allowedMimeTypes: { note: ['text/plain'], photo: ['image/jpeg'], pdf: ['application/pdf'] },
 };
 
+const ACCESS_POLICY = { maxCodeAttempts: 5, maxReissues: 5 };
+
 function request(server: http.Server, method: string, path: string, opts: { body?: string; token?: string } = {}): Promise<{ status: number; body: string }> {
   const { port } = server.address() as AddressInfo;
   return new Promise((resolve, reject) => {
@@ -72,10 +74,12 @@ describe('composition (wired servers)', () => {
       cursors: new InMemoryKeyValueStore(),
       credentials: creds,
       auditFor,
-      secrets: { cancelTokenSecrets: ['cancel-secret'], sessionSecret: 'sess', kmsMasterKey: randomBytes(32) },
+      secrets: { cancelTokenSecrets: ['cancel-secret'], sessionSecret: 'sess', kmsKeyRing: [randomBytes(32)] },
       channels: { email: new InMemoryEmailAdapter(), sms: new InMemorySmsAdapter(), push: new InMemoryPushAdapter(), storage: new InMemoryStorageAdapter() },
       publisher: new InMemoryPublicPublisher(),
       contentPolicy: POLICY,
+      recipientAccessPolicy: ACCESS_POLICY,
+      schedulerIntervalMs: 60_000,
       sessionTtlMs: 3_600_000,
       opsEmail: 'ops@x.test',
       gatedBaseUrl: 'https://app.test/release',
@@ -139,9 +143,9 @@ describe('composition (wired servers)', () => {
 
     const config: AppConfig = {
       state: s, cursors: new InMemoryKeyValueStore(), credentials: new InMemoryKeyValueStore(), auditFor,
-      secrets: { cancelTokenSecrets: ['c'], sessionSecret: 's', kmsMasterKey: randomBytes(32) },
+      secrets: { cancelTokenSecrets: ['c'], sessionSecret: 's', kmsKeyRing: [randomBytes(32)] },
       channels: { email: new InMemoryEmailAdapter(), sms: new InMemorySmsAdapter(), push: new InMemoryPushAdapter(), storage: new InMemoryStorageAdapter() },
-      publisher: new InMemoryPublicPublisher(), contentPolicy: POLICY, sessionTtlMs: 1000, opsEmail: 'o@t.test',
+      publisher: new InMemoryPublicPublisher(), contentPolicy: POLICY, recipientAccessPolicy: ACCESS_POLICY, schedulerIntervalMs: 60_000, sessionTtlMs: 1000, opsEmail: 'o@t.test',
       gatedBaseUrl: 'https://app.test/release', cancelFallback: {}, now: () => 1000,
     };
     const services = buildServices(config);

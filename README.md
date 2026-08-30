@@ -40,8 +40,44 @@ change, not a code change.
 ```
 npm ci
 npm run typecheck   # tsc --noEmit
-npm test            # jest — 322 tests, tests-first across every tier
+npm test            # jest — 359 tests, tests-first across every tier
 ```
+
+## Running the service
+
+`src/main.ts` is the entrypoint; `src/bootstrap.ts` assembles the whole system
+(the two servers — the cancel surface has its own port/failure domain, F1.4 —
+plus the scheduler driver that ticks the Phase E worker on a clock).
+
+```
+npm run build
+LV_CONFIG_FILE=./config.json \
+LV_CANCEL_SECRET=… LV_SESSION_SECRET=… LV_KMS_MASTER_KEY=<64 hex> \
+LV_TWILIO_ACCOUNT_SID=… LV_TWILIO_AUTH_TOKEN=… LV_TWILIO_FROM=… \
+LV_STORAGE_BASE_URL=… LV_EMAIL_SEND_URL=… \
+npm start
+```
+
+Secrets and vendor credentials come from the **environment** (never committed).
+Non-secret operational values — ports, storage paths, and the deployment
+**policy numbers** (content size limits 11.5, recipient attempt cap F4.1) — come
+from the JSON file named by `LV_CONFIG_FILE`; see `config.example.json`. The
+policy values arrive as config, never invented in code (CLAUDE.md). `SIGINT`/
+`SIGTERM` stops the scheduler and closes both ports cleanly.
+
+The KMS master key is a **key ring** with overlapping validity (G2.1): set
+`LV_KMS_MASTER_KEY` to the current key and, during a rotation, list the retired
+keys in `LV_KMS_MASTER_KEY_PREVIOUS` (comma-separated hex). New content is wrapped
+under the current key; content already sealed under an older key keeps opening
+because that key stays in the ring — so rotating never strands stored content
+(re-wrap only, never re-encryption). Once every stored envelope has been re-wrapped
+to the current key, the retired key can be dropped from `LV_KMS_MASTER_KEY_PREVIOUS`.
+
+Not yet production-ready from this entrypoint: the public-release publisher is an
+in-memory stand-in (§PUBLIC_RELEASE destination unwired), the KMS wrapper is a
+local AES key ring rather than a cloud KMS (a cloud adapter implements the same
+`KeyWrapper` and drops into the composition root unchanged), and there is no UI
+for the user/operator/admin JSON APIs.
 
 ## Layout
 

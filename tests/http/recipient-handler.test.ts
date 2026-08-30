@@ -23,7 +23,9 @@ import {
   ReleasePlanRepository,
 } from '../../src/persistence';
 import { ReleaseService } from '../../src/app';
+import { EnvelopeCrypto, LocalKeyWrapper } from '../../src/adapters/crypto';
 import { handleRecipient, type HttpRequest } from '../../src/http';
+import { randomBytes } from 'node:crypto';
 import { T0, daysAfter, machineIn } from '../support/factory';
 
 const RELEASED_AT = daysAfter(T0, 62);
@@ -67,6 +69,28 @@ function harness() {
   const code = codeOf(begun.messages);
   const deps = { release, now: () => RELEASED_AT + HOUR_MS };
   return { deps, link, code };
+}
+
+/** A harness that wires real envelope crypto and a sealed note, for the render path. */
+function cryptoHarness(noteText: string) {
+  const store = new InMemoryKeyValueStore();
+  const machines = new MachineRepository(store);
+  const contacts = new ContactRepository(store);
+  const payloads = new PayloadRepository(store);
+  const plans = new ReleasePlanRepository(store);
+  const deliveries = new DeliveryRepository(store);
+  const auditFor = () => new HashChainedAuditStore(new InMemoryAppendOnlySink()) as AuditSink;
+  const crypto = new EnvelopeCrypto(new LocalKeyWrapper({ keyId: 'k1', masterKey: randomBytes(32) }));
+  const release = new ReleaseService({ machines, contacts, payloads, plans, deliveries, auditFor, crypto });
+  machines.save('a', Machine.restore(machineIn('PRIVATE_RELEASE')));
+  contacts.save('a', recipient('r1'));
+  payloads.save('a', {
+    id: 'p1', kind: 'note', mimeType: 'text/plain', byteSize: Buffer.byteLength(noteText),
+    envelope: crypto.seal(noteText), recipientIds: ['r1'], version: 1, createdAt: T0, updatedAt: T0,
+  });
+  const begun = release.begin('a', ['r1'], RELEASED_AT);
+  if (!begun.ok) throw new Error('begin failed');
+  return { deps: { release, now: () => RELEASED_AT + HOUR_MS }, link: linkOf(begun.messages), code: codeOf(begun.messages) };
 }
 
 function get(query: Record<string, string>): HttpRequest {
@@ -126,5 +150,25 @@ describe('handleRecipient', () => {
     // The success page shows only a count, not ids or the code.
     expect(unlocked.body).not.toContain(code);
     expect(unlocked.body).not.toContain('r1');
+  });
+
+  it('renders the decrypted note content server-side on the unlocked page (F4/G2)', () => {
+    const note = 'Remember to water the roses on Sundays.';
+    const { deps, link, code } = cryptoHarness(note);
+    const res = handleRecipient(form('/release', { a: 'a', link, code }), deps);
+    expect(res.status).toBe(200);
+    expect(res.body).toContain(note);
+    // Still no code, link, or recipient id in the body (invariant 6).
+    expect(res.body).not.toContain(code);
+    expect(res.body).not.toContain(link);
+    expect(res.body).not.toContain('r1');
+  });
+
+  it('escapes decrypted note content so a message cannot inject markup', () => {
+    const note = '<script>alert(1)</script>';
+    const { deps, link, code } = cryptoHarness(note);
+    const res = handleRecipient(form('/release', { a: 'a', link, code }), deps);
+    expect(res.body).not.toContain('<script>alert(1)</script>');
+    expect(res.body).toContain('&lt;script&gt;');
   });
 });

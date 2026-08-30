@@ -8,3 +8,4 @@
 export * from './due';
 export * from './senders';
 export * from './scheduler';
+export * from './driver';

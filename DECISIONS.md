@@ -482,8 +482,12 @@ the highest-SLO surface first. In brief:
     gated page with NO auth seam (link + separate-channel code is the F3
     exception): the code travels only in a POST body, access is allowed only
     while the account is in a release state (a later cancel denies it), every
-    access is logged as metadata only (invariant 6/7), and no page shows
-    content, the code, or a recipient id. +14 tests.
+    access is logged as metadata only (invariant 6/7), and no page shows the
+    code or a recipient id. After the gated link + code authenticate, the
+    addressed content is decrypted PER VIEW, server-side (G2), and rendered into
+    the page body — a note as escaped text, a photo/pdf embedded as a data URI;
+    nothing sensitive is ever placed in a URL, query, or client storage, and an
+    item that cannot be decrypted is withheld rather than crashing or leaking. +14 tests.
   - *People & authoring services (F2, F6)* — `PeopleService` manages the roster
     and the user-defined recipient order (validated to cover every recipient, so
     none is silently dropped from the death path); `AuthoringService` manages

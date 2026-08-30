@@ -11,9 +11,10 @@
 // here is hard-coded.
 
 import { randomBytes, randomInt } from 'node:crypto';
-import { EnvelopeCrypto, LocalKeyWrapper } from './adapters/crypto';
+import { EnvelopeCrypto, KeyRingWrapper } from './adapters/crypto';
 import { CredentialStore, SessionAuthenticator, AuthService } from './adapters/auth';
 import type { Channels, PublicPublisher } from './adapters/channels';
+import { ChannelAlertSender, ChannelReminderSender, dependencyProbers } from './adapters/channels';
 import type { Secrets } from './adapters/secrets';
 import {
   AdminService,
@@ -27,6 +28,7 @@ import {
   ReleaseService,
 } from './app';
 import type { ContentPolicy } from './domain/payload';
+import type { RecipientAccessPolicy } from './delivery';
 import {
   CaseFileRepository,
   ContactRepository,
@@ -37,7 +39,7 @@ import {
   ReleasePlanRepository,
   type KeyValueStore,
 } from './persistence';
-import type { AuditSinkFactory } from './runtime';
+import { Scheduler, SchedulerDriver, type AuditSinkFactory } from './runtime';
 import {
   createCancelServer,
   createNodeServer,
@@ -68,12 +70,16 @@ export interface AppConfig {
   readonly channels: Channels;
   readonly publisher: PublicPublisher;
   readonly contentPolicy: ContentPolicy;
+  /** Recipient gated-page attempt cap / re-issue throttle (F4.1). */
+  readonly recipientAccessPolicy: RecipientAccessPolicy;
   readonly sessionTtlMs: number;
   readonly opsEmail: string;
   /** Base URL the recipient gated link is built on. */
   readonly gatedBaseUrl: string;
   /** Support / in-app-cancel links shown on the cancel fail-safe page. */
   readonly cancelFallback: CancelFallback;
+  /** How often the scheduler driver runs due work, in ms (Phase E). */
+  readonly schedulerIntervalMs: number;
   readonly now: () => number;
 }
 
@@ -102,7 +108,10 @@ export function buildServices(config: AppConfig): Services {
   const recipientOrders = new RecipientOrderRepository(config.state);
   const { auditFor, secrets, channels } = config;
 
-  const crypto = new EnvelopeCrypto(new LocalKeyWrapper({ keyId: 'kms-primary', masterKey: secrets.kmsMasterKey }));
+  // KeyRingWrapper gives master-key rotation with overlapping validity (G2.1):
+  // wrap under the current key, unwrap against every key in the ring. A real
+  // cloud-KMS adapter implements the same KeyWrapper and drops in here unchanged.
+  const crypto = new EnvelopeCrypto(new KeyRingWrapper(secrets.kmsKeyRing));
 
   // Crypto-secure generators for the recipient release capability tokens. The
   // gated link + one-time code are the ONLY thing standing between an attacker
@@ -111,7 +120,18 @@ export function buildServices(config: AppConfig): Services {
   // link token; deployment adds the F4.1 attempt cap.
   const codeGenerator = (): string => String(randomInt(0, 1_000_000)).padStart(6, '0');
   const linkGenerator = (): string => `gl_${randomBytes(32).toString('base64url')}`;
-  const releaseArgs = { machines, contacts, payloads, plans, deliveries, auditFor, codeGenerator, linkGenerator };
+  const releaseArgs = {
+    machines,
+    contacts,
+    payloads,
+    plans,
+    deliveries,
+    auditFor,
+    codeGenerator,
+    linkGenerator,
+    accessPolicy: config.recipientAccessPolicy,
+    crypto,
+  };
   const credentialStore = new CredentialStore(config.credentials);
   const authenticator = new SessionAuthenticator({ secret: secrets.sessionSecret, now: config.now });
   const auth = new AuthService({ credentials: credentialStore, sessionSecret: secrets.sessionSecret, sessionTtlMs: config.sessionTtlMs, auditFor });
@@ -163,4 +183,44 @@ export function createServers(config: AppConfig, metrics?: RequestMetrics): Serv
   const cancelServer = createCancelServer(cancelDeps, metrics === undefined ? {} : { metrics });
   const apiServer = createNodeServer(apiRoute(services, config.now));
   return { cancelServer, apiServer, services };
+}
+
+/**
+ * Build the Phase E worker over the same persisted state the surfaces use. Its
+ * reminders and health alerts go out over the real channels; its probers are the
+ * real vendor probes, so a failing dependency drives veto path 3 (§6). The
+ * scheduler mutates only through `machine.apply` → `transition` — it writes no
+ * state directly (Preamble).
+ */
+export function buildScheduler(config: AppConfig): Scheduler {
+  return new Scheduler({
+    machines: new MachineRepository(config.state),
+    cursorStore: config.cursors,
+    auditFor: config.auditFor,
+    reminderSender: new ChannelReminderSender(config.channels),
+    alertSender: new ChannelAlertSender({ channels: config.channels, opsEmail: config.opsEmail }),
+    probers: dependencyProbers(config.channels),
+  });
+}
+
+export interface Runtime extends Servers {
+  readonly scheduler: Scheduler;
+  /** The driver that ticks the scheduler; not started — call `.start()`. */
+  readonly driver: SchedulerDriver;
+}
+
+/**
+ * Assemble the whole runnable system: the two servers, the application services,
+ * the scheduler, and its driver. Nothing is started — the entrypoint (`main.ts`)
+ * seeds health, calls `.listen(...)` on the servers, and `.start()` on the driver.
+ */
+export function createRuntime(config: AppConfig, metrics?: RequestMetrics): Runtime {
+  const { cancelServer, apiServer, services } = createServers(config, metrics);
+  const scheduler = buildScheduler(config);
+  const driver = new SchedulerDriver({
+    scheduler,
+    intervalMs: config.schedulerIntervalMs,
+    now: config.now,
+  });
+  return { cancelServer, apiServer, services, scheduler, driver };
 }

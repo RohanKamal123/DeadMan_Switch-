@@ -14,6 +14,7 @@ import {
   ReleaseNotReadyError,
   type ReleaseRecipient,
 } from '../../src/delivery/release';
+import type { RecipientAccessPolicy } from '../../src/delivery/access-policy';
 import { CODE_EXPIRY_HOURS, HOUR_MS, RECIPIENT_FALLBACK_DAYS, DAY_MS } from '../../src/domain/config';
 
 const RELEASED_AT = 1_700_000_000_000;
@@ -49,6 +50,7 @@ function controller(opts: {
   confirmations?: Confirmation[];
   state?: 'PRIVATE_RELEASE' | 'HOLD';
   audit?: AuditLog;
+  accessPolicy?: RecipientAccessPolicy;
 }) {
   const gen = sequences();
   return new ReleaseController({
@@ -59,6 +61,7 @@ function controller(opts: {
     audit: opts.audit ?? new AuditLog(),
     codeGenerator: gen.codeGenerator,
     linkGenerator: gen.linkGenerator,
+    ...(opts.accessPolicy !== undefined ? { accessPolicy: opts.accessPolicy } : {}),
   });
 }
 
@@ -144,6 +147,66 @@ describe('ReleaseController — gated authentication', () => {
     c.begin(RELEASED_AT);
     c.revoke('r1', 'admin-1', RELEASED_AT + HOUR_MS);
     expect(c.authenticate('link-1', 'CODE1', RELEASED_AT + 2 * HOUR_MS).ok).toBe(false);
+  });
+});
+
+describe('ReleaseController — recipient-access policy (F4.1)', () => {
+  const POLICY: RecipientAccessPolicy = { maxCodeAttempts: 3, maxReissues: 2 };
+
+  it('caps failed code attempts and then refuses even the correct code until re-issue', () => {
+    const audit = new AuditLog();
+    const c = controller({ recipients: [recipient('r1')], audit, accessPolicy: POLICY });
+    c.begin(RELEASED_AT);
+    const at = RELEASED_AT + HOUR_MS;
+
+    // Three wrong attempts exhaust the per-code budget.
+    for (let i = 0; i < 3; i++) {
+      expect(c.authenticate('link-1', 'WRONG', at).ok).toBe(false);
+    }
+    // The correct code is now refused — the code is dead, a re-issue is required.
+    const capped = c.authenticate('link-1', 'CODE1', at);
+    expect(capped.ok).toBe(false);
+    if (capped.ok) return;
+    expect(capped.reason).toMatch(/too many attempts/i);
+
+    // Each failure is logged as metadata only (no code/link/content).
+    const fails = audit.all().filter((e) => e.event === 'RELEASE_ACCESS_FAIL');
+    expect(fails.length).toBe(3);
+    expect(Object.values(fails[0]!.metadata).join(' ')).not.toMatch(/CODE1|link-1|WRONG/);
+  });
+
+  it('a re-issue resets the attempt budget and the fresh code unlocks', () => {
+    const c = controller({ recipients: [recipient('r1')], accessPolicy: POLICY });
+    c.begin(RELEASED_AT);
+    const at = RELEASED_AT + HOUR_MS;
+    for (let i = 0; i < 3; i++) c.authenticate('link-1', 'WRONG', at);
+
+    const re = c.reissueCode('r1', at);
+    expect(re.ok).toBe(true);
+    if (!re.ok) return;
+    // Fresh code (CODE2) authenticates; the attempt cap no longer bites.
+    expect(c.authenticate('link-1', re.sms.code, at).ok).toBe(true);
+  });
+
+  it('throttles re-issues to the configured maximum', () => {
+    const c = controller({ recipients: [recipient('r1')], accessPolicy: POLICY });
+    c.begin(RELEASED_AT);
+    const at = RELEASED_AT + HOUR_MS;
+    expect(c.reissueCode('r1', at).ok).toBe(true); // 1
+    expect(c.reissueCode('r1', at).ok).toBe(true); // 2
+    const third = c.reissueCode('r1', at); // over the cap of 2
+    expect(third.ok).toBe(false);
+    if (third.ok) return;
+    expect(third.reason).toMatch(/re-issue limit/i);
+  });
+
+  it('imposes no cap when no policy is configured (numbers are deployment config, never invented)', () => {
+    const c = controller({ recipients: [recipient('r1')] });
+    c.begin(RELEASED_AT);
+    const at = RELEASED_AT + HOUR_MS;
+    for (let i = 0; i < 10; i++) expect(c.authenticate('link-1', 'WRONG', at).ok).toBe(false);
+    // Correct code still works — no invented lockout.
+    expect(c.authenticate('link-1', 'CODE1', at).ok).toBe(true);
   });
 });
 

@@ -1,0 +1,27 @@
+{
+  "apiPort": 8080,
+  "cancelPort": 8081,
+  "schedulerIntervalMs": 60000,
+  "sessionTtlMs": 3600000,
+  "opsEmail": "ops@your-company.example",
+  "gatedBaseUrl": "https://app.your-company.example/release",
+  "cancelFallback": {
+    "supportUrl": "https://app.your-company.example/support",
+    "inAppCancelUrl": "https://app.your-company.example/cancel"
+  },
+  "storage": {
+    "statePath": "./data/state.json",
+    "cursorPath": "./data/cursors.json",
+    "credentialsPath": "./data/credentials.json",
+    "auditDir": "./data/audit"
+  },
+  "contentPolicy": {
+    "maxBytesByKind": { "note": 10000, "photo": 5000000, "pdf": 10000000 },
+    "allowedMimeTypes": {
+      "note": ["text/plain"],
+      "photo": ["image/jpeg", "image/png"],
+      "pdf": ["application/pdf"]
+    }
+  },
+  "recipientAccessPolicy": { "maxCodeAttempts": 5, "maxReissues": 5 }
+}
