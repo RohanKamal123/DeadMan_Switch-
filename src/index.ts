@@ -9,3 +9,5 @@ export * from './health';
 export * from './retention';
 export * from './persistence';
 export * from './runtime';
+export * from './app';
+export * from './http';

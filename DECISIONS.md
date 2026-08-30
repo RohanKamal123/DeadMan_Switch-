@@ -428,15 +428,22 @@ are the phases below.
   DELAYS events; on restart the scheduler re-derives every due timer from the
   Phase D persisted state and catches up one guarded step at a time.
 
-### Phase F — Surfaces & API — **DECISIONS SETTLED** (`DECISIONS_PHASE_F_G.md`)
+### Phase F — Surfaces & API — **IN PROGRESS** (decisions in `DECISIONS_PHASE_F_G.md`)
 Architecture and product decisions for this phase are settled in
-`DECISIONS_PHASE_F_G.md` (Phase F, items F0–F7); implementation is the next
-build step. In brief:
-- **Cancel-link endpoint + page first** (6.1) — the highest-SLO surface; the
-  token logic exists (`src/cancel/`), it needs an HTTP route and the fail-safe
-  page from UX §2 (bad/expired token never dead-ends). Decided: `GET` renders /
-  `POST` cancels, token-as-capability (no CSRF handshake), idempotent, isolated
-  failure domain, observable SLO (F1).
+`DECISIONS_PHASE_F_G.md` (Phase F, items F0–F7). Implementation has started with
+the highest-SLO surface first. In brief:
+- **Cancel-link endpoint + page — DONE** (6.1, F1). `src/app/` (the
+  application-service tier — the only tier that mutates) + `src/http/` (thin
+  transport), 22 tests, suite green. `CancelService.preview` validates without
+  mutating so `GET` is side-effect free (F1.1); `CancelService.redeem` applies
+  CANCEL through the guarded `transition` and persists (invariant 1, logged per
+  invariant 7). The handler renders on `GET` / cancels on `POST`, is idempotent
+  (F1.3), token-as-capability so no CSRF handshake, and fails safe on any bad
+  token or store outage — the fallback page with the support path + in-app
+  cancel never dead-ends (F1.2). The server module has no import path to any
+  vendor adapter, keeping the cancel surface in its own failure domain (F1.4).
+  Still to wire: the observable-SLO metrics (F7) and the deployment topology
+  (F1.5, ops).
 - **Service/API layer** for the four audiences: user app (check-in, people,
   authoring), operator console, recipient gated page, admin. Each endpoint maps
   to a `transition` event or console action — no surface writes state directly.
