@@ -37,6 +37,17 @@ export interface StoragePort {
   probe(): boolean;
 }
 
+/**
+ * Publishes public-release content to the user-designated destination
+ * (PRODUCT_SPEC.md §PUBLIC_RELEASE). The concrete destination (a public page,
+ * an archive, …) is a deployment concern; the port keeps the death-path
+ * orchestration independent of it. Only ever invoked once the machine is in
+ * PUBLIC_RELEASE (the 14-day gap after PRIVATE_RELEASE, enforced by the machine).
+ */
+export interface PublicPublisher {
+  publish(accountId: string, at: number): void;
+}
+
 // --- in-memory adapters (tests / local dev; no SDK) -------------------------
 
 interface SentEmail {
@@ -79,6 +90,13 @@ export class InMemoryPushAdapter implements PushPort {
   }
   probe(): boolean {
     return this.healthy;
+  }
+}
+
+export class InMemoryPublicPublisher implements PublicPublisher {
+  readonly published: { accountId: string; at: number }[] = [];
+  publish(accountId: string, at: number): void {
+    this.published.push({ accountId, at });
   }
 }
 

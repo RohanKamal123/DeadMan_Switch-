@@ -532,15 +532,27 @@ Architecture/product decisions are settled in `DECISIONS_PHASE_F_G.md`
   env, never logged; the cancel secret rotates with overlapping validity
   (`CancelService` verifies against [current, ...previous]) so invariant 1
   survives a rotation.
-- **Still to build in G:** wiring the crypto into authoring/recipient decrypt
-  (G2 end-to-end), and the security-review gate (G6). Content size limits arrive
-  as deployment `ContentPolicy` (11.5, G5).
+- **G2 end-to-end — DONE:** the lifecycle e2e (Phase H) authors content sealed
+  with `EnvelopeCrypto`, releases it through the machine + scheduler, and the
+  recipient decrypts the exact plaintext — proving the crypto path composes.
+- **Still to build in G:** the security-review gate (G6). Content size limits
+  arrive as deployment `ContentPolicy` (11.5, G5).
 
-### Phase H — Completeness
-- Public-release publish to the user-designated destination (§PUBLIC_RELEASE).
-- Quarterly drill flow (§6) — the primary mitigation for contact rot.
-- A full-lifecycle end-to-end test (ACTIVE → … → PRIVATE_RELEASE) exercised
-  through persistence + the scheduler.
+### Phase H — Completeness — **DONE**
+- **Public-release publish (§PUBLIC_RELEASE) — DONE.** `PublicReleaseService`
+  publishes through a `PublicPublisher` port ONLY once the machine is in
+  PUBLIC_RELEASE (the machine enforces the 14-day gap and the enabled flag);
+  logged, never advancing the machine. The concrete destination is a deployment
+  concern behind the port.
+- **Quarterly drill (§6) — DONE.** `DrillService` sends a labelled test
+  email/SMS to a contact carrying nothing sensitive (no link/code/content), and
+  logs it — the primary mitigation for contact rot.
+- **Full-lifecycle e2e — DONE.** `tests/e2e/lifecycle.test.ts` drives ACTIVE →
+  NUDGE → VERIFYING → HOLD → PRIVATE_RELEASE → PUBLIC_RELEASE through the real
+  persistence layer, scheduler, services, and encryption: nothing releases
+  before its window, the recipient decrypts the authored plaintext, and the
+  immutable trail verifies. A companion test shows a check-in wipes the process
+  from VERIFYING (invariant 1).
 
 ### Still-open product decisions that gate later phases
 - **11.2 Automated dormancy/lapse policy (2.3)** — before scaling past pilot;
