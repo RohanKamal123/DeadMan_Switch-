@@ -1,18 +1,47 @@
-# Legacy Vault — Phase C
+# Legacy Vault — V1
 
-Posthumous message delivery (V1, manual / no-AI). Phase C implements the whole
-death path in code: the **eight-state machine** and its **immutable audit log**,
-the **`Payload` content schema**, the **operator console** that fires the
-machine's events, the **release-delivery engine**, the **notification cadence**,
-the **no-login cancel link**, the **weekly health check**, and the **retention
-lifecycle** — all written tests-first, because everything here touches the
-release path where *being wrong is worse than being slow*.
+Posthumous message delivery (V1, manual / no-AI). The whole system is built and
+tested: the **eight-state machine** and its **immutable audit log**, the
+**`Payload` content schema**, the **operator console**, the **release-delivery
+engine**, the **notification cadence**, the **no-login cancel link**, the
+**weekly health check**, and the **retention lifecycle** (Phases C–E), plus the
+**application-service tier**, the **four HTTP surfaces** (Phase F), **vendor
+adapters, envelope encryption, and auth** (Phase G), and **public release,
+quarterly drill, and a full-lifecycle end-to-end test** (Phase H) — all
+tests-first, because everything here touches the release path where *being wrong
+is worse than being slow*.
 
-Read `PRODUCT_SPEC.md` (behaviour + invariants), `DECISIONS.md` (why), and
-`CLAUDE.md` (the one rule + invariants) before changing anything. The
-architecture/product decisions for the not-yet-built network phases are settled
-in `DECISIONS_PHASE_F_G.md` (Phase F — Surfaces & API; Phase G — Integrations &
-security).
+Read `PRODUCT_SPEC.md` (behaviour + invariants), `DECISIONS.md` (why + the
+engineering roadmap), and `CLAUDE.md` (the one rule + invariants) before
+changing anything. The network-phase architecture decisions are in
+`DECISIONS_PHASE_F_G.md` (Phase F — Surfaces & API; Phase G — Integrations &
+security), including the closing security review (G6).
+
+## Architecture at a glance
+
+Four tiers, and only the middle one mutates:
+
+1. **Pure core** (`src/domain`, `src/console`, `src/delivery`, …) — the guarded
+   state machine and every invariant. No IO.
+2. **Application services** (`src/app`) — the ONLY tier that mutates: each method
+   loads via a repository, calls the core, and persists. Transport-agnostic.
+3. **HTTP transport** (`src/http`) — thin handlers that authenticate, parse, and
+   call tier 2. No surface writes state.
+4. **Adapters** (`src/adapters`) — vendor channels, envelope encryption, auth,
+   secrets. Dumb pipes behind ports; no SDK escapes its directory.
+
+`src/composition.ts` wires them into two servers — the **cancel** server (its
+own failure domain) and the **main API** server — from injected secrets and
+adapters. Swapping the in-memory dev adapters for real vendors is a config
+change, not a code change.
+
+## Build & test
+
+```
+npm ci
+npm run typecheck   # tsc --noEmit
+npm test            # jest — 322 tests, tests-first across every tier
+```
 
 ## Layout
 

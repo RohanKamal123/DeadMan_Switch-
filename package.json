@@ -2,7 +2,7 @@
   "name": "legacy-vault",
   "version": "0.0.0",
   "private": true,
-  "description": "Legacy Vault — posthumous message delivery (V1, manual / no-AI). Phase E: runtime scheduler firing time events over the durable Phase D state.",
+  "description": "Legacy Vault — posthumous message delivery (V1, manual / no-AI). Full stack: guarded state machine, durable audit + persistence, scheduler, application services, four HTTP surfaces, vendor adapters, envelope encryption, and auth.",
   "license": "UNLICENSED",
   "scripts": {
     "build": "tsc -p tsconfig.json",
