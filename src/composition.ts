@@ -27,6 +27,7 @@ import {
   ReleaseService,
 } from './app';
 import type { ContentPolicy } from './domain/payload';
+import type { RecipientAccessPolicy } from './delivery';
 import {
   CaseFileRepository,
   ContactRepository,
@@ -68,6 +69,8 @@ export interface AppConfig {
   readonly channels: Channels;
   readonly publisher: PublicPublisher;
   readonly contentPolicy: ContentPolicy;
+  /** Recipient gated-page attempt cap / re-issue throttle (F4.1). */
+  readonly recipientAccessPolicy: RecipientAccessPolicy;
   readonly sessionTtlMs: number;
   readonly opsEmail: string;
   /** Base URL the recipient gated link is built on. */
@@ -111,7 +114,18 @@ export function buildServices(config: AppConfig): Services {
   // link token; deployment adds the F4.1 attempt cap.
   const codeGenerator = (): string => String(randomInt(0, 1_000_000)).padStart(6, '0');
   const linkGenerator = (): string => `gl_${randomBytes(32).toString('base64url')}`;
-  const releaseArgs = { machines, contacts, payloads, plans, deliveries, auditFor, codeGenerator, linkGenerator };
+  const releaseArgs = {
+    machines,
+    contacts,
+    payloads,
+    plans,
+    deliveries,
+    auditFor,
+    codeGenerator,
+    linkGenerator,
+    accessPolicy: config.recipientAccessPolicy,
+    crypto,
+  };
   const credentialStore = new CredentialStore(config.credentials);
   const authenticator = new SessionAuthenticator({ secret: secrets.sessionSecret, now: config.now });
   const auth = new AuthService({ credentials: credentialStore, sessionSecret: secrets.sessionSecret, sessionTtlMs: config.sessionTtlMs, auditFor });

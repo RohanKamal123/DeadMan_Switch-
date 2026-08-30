@@ -25,7 +25,9 @@ import {
   ReleasePlanRepository,
 } from '../../src/persistence';
 import { ReleaseService } from '../../src/app';
+import { EnvelopeCrypto, LocalKeyWrapper } from '../../src/adapters/crypto';
 import type { AuditSinkFactory } from '../../src/runtime';
+import { randomBytes } from 'node:crypto';
 import { T0, daysAfter, machineIn } from '../support/factory';
 
 const RELEASED_AT = daysAfter(T0, 62); // matches machineIn('PRIVATE_RELEASE')
@@ -174,5 +176,68 @@ describe('ReleaseService', () => {
     h.setState('CANCELLED');
     const res = h.service.authenticate('a', link, code, RELEASED_AT + HOUR_MS);
     expect(res.ok).toBe(false);
+  });
+});
+
+describe('ReleaseService.contentView — server-side decryption per view (F4/G2)', () => {
+  function cryptoHarness() {
+    const store = new InMemoryKeyValueStore();
+    const machines = new MachineRepository(store);
+    const contacts = new ContactRepository(store);
+    const payloads = new PayloadRepository(store);
+    const plans = new ReleasePlanRepository(store);
+    const deliveries = new DeliveryRepository(store);
+    const auditFor: AuditSinkFactory = () => new HashChainedAuditStore(new InMemoryAppendOnlySink()) as AuditSink;
+    const crypto = new EnvelopeCrypto(new LocalKeyWrapper({ keyId: 'k1', masterKey: randomBytes(32) }));
+    const service = new ReleaseService({ machines, contacts, payloads, plans, deliveries, auditFor, crypto });
+    machines.save('a', Machine.restore(machineIn('PRIVATE_RELEASE')));
+    contacts.save('a', recipient('r1'));
+    return { service, payloads, crypto };
+  }
+
+  function sealedNote(id: string, crypto: EnvelopeCrypto, text: string, recipientIds: readonly string[]): Payload {
+    return {
+      id, kind: 'note', mimeType: 'text/plain', byteSize: Buffer.byteLength(text),
+      envelope: crypto.seal(text), recipientIds, version: 1, createdAt: T0, updatedAt: T0,
+    };
+  }
+
+  it('decrypts the addressed note and returns its plaintext for rendering', () => {
+    const h = cryptoHarness();
+    h.payloads.save('a', sealedNote('p1', h.crypto, 'Take care of your mother. — Dad', ['r1']));
+    const items = h.service.contentView('a', ['p1']);
+    expect(items).toHaveLength(1);
+    expect(items[0]!.available).toBe(true);
+    expect(items[0]!.encoding).toBe('utf8');
+    expect(items[0]!.content).toBe('Take care of your mother. — Dad');
+  });
+
+  it('withholds an item that cannot be decrypted instead of crashing (fail safe)', () => {
+    const h = cryptoHarness();
+    // A payload whose envelope is not real ciphertext for this key.
+    h.payloads.save('a', {
+      id: 'p2', kind: 'note', mimeType: 'text/plain', byteSize: 3,
+      envelope: { algorithm: 'AES-256-GCM', keyId: 'k1', encryptedDataKey: 'bogus', iv: 'iv', ciphertext: 'ct', version: 1 },
+      recipientIds: ['r1'], version: 1, createdAt: T0, updatedAt: T0,
+    });
+    const items = h.service.contentView('a', ['p2']);
+    expect(items).toHaveLength(1);
+    expect(items[0]!.available).toBe(false);
+    expect(items[0]!.content).toBeNull();
+  });
+
+  it('reveals nothing when no crypto is configured (the page shows presence, not content)', () => {
+    const store = new InMemoryKeyValueStore();
+    const payloads = new PayloadRepository(store);
+    const crypto = new EnvelopeCrypto(new LocalKeyWrapper({ keyId: 'k1', masterKey: randomBytes(32) }));
+    const service = new ReleaseService({
+      machines: new MachineRepository(store), contacts: new ContactRepository(store), payloads,
+      plans: new ReleasePlanRepository(store), deliveries: new DeliveryRepository(store),
+      auditFor: () => new HashChainedAuditStore(new InMemoryAppendOnlySink()) as AuditSink,
+    });
+    payloads.save('a', sealedNote('p1', crypto, 'secret', ['r1']));
+    const items = service.contentView('a', ['p1']);
+    expect(items[0]!.available).toBe(false);
+    expect(items[0]!.content).toBeNull();
   });
 });

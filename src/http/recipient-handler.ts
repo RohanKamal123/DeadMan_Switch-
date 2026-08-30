@@ -23,6 +23,16 @@ import {
   renderUnlockedPage,
 } from './recipient-pages';
 
+// The rendering-facing shape of a decrypted item; kept structurally compatible
+// with the app tier's `ReleasedItem` so the handler needs no import cycle.
+export interface RenderableItem {
+  readonly kind: 'note' | 'photo' | 'pdf';
+  readonly mimeType: string;
+  readonly encoding: 'utf8' | 'base64';
+  readonly content: string | null;
+  readonly available: boolean;
+}
+
 export interface RecipientHandlerDeps {
   readonly release: ReleaseService;
   readonly now: () => number;
@@ -70,7 +80,11 @@ export function handleRecipient(req: HttpRequest, deps: RecipientHandlerDeps): H
       if (!result.ok) {
         return html(200, renderReleaseErrorPage(result.reason, { account, link }));
       }
-      return html(200, renderUnlockedPage(result.payloadIds.length));
+      // Decrypt the addressed content per view, server-side (F4/G2), and render
+      // it into the page body. Nothing sensitive is placed in a URL or in client
+      // storage — the plaintext lives only in this response's HTML (invariant 6).
+      const items = deps.release.contentView(account, result.payloadIds);
+      return html(200, renderUnlockedPage(items));
     }
 
     if (req.method === 'POST' && req.path === '/release/resend') {
