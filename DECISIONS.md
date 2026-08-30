@@ -428,22 +428,42 @@ are the phases below.
   DELAYS events; on restart the scheduler re-derives every due timer from the
   Phase D persisted state and catches up one guarded step at a time.
 
-### Phase F — Surfaces & API
+### Phase F — Surfaces & API — **DECISIONS SETTLED** (`DECISIONS_PHASE_F_G.md`)
+Architecture and product decisions for this phase are settled in
+`DECISIONS_PHASE_F_G.md` (Phase F, items F0–F7); implementation is the next
+build step. In brief:
 - **Cancel-link endpoint + page first** (6.1) — the highest-SLO surface; the
   token logic exists (`src/cancel/`), it needs an HTTP route and the fail-safe
-  page from UX §2 (bad/expired token never dead-ends).
+  page from UX §2 (bad/expired token never dead-ends). Decided: `GET` renders /
+  `POST` cancels, token-as-capability (no CSRF handshake), idempotent, isolated
+  failure domain, observable SLO (F1).
 - **Service/API layer** for the four audiences: user app (check-in, people,
   authoring), operator console, recipient gated page, admin. Each endpoint maps
   to a `transition` event or console action — no surface writes state directly.
+  Decided: three-tier layering (pure core → application services, the only
+  mutating tier → thin HTTP transport), auth as a seam implemented in G, every
+  surface fails safe (F0, F2–F7).
 
-### Phase G — Integrations & security
+### Phase G — Integrations & security — **DECISIONS SETTLED** (`DECISIONS_PHASE_F_G.md`)
+Architecture and product decisions for this phase are settled in
+`DECISIONS_PHASE_F_G.md` (Phase G, items G1–G6); implementation follows F. The
+concrete work items, now with decisions attached:
 - **Vendor adapters** behind interfaces — email / SMS / storage — plugged into
   the health check's probers. No SDK import outside its adapter directory.
+  Decided: dumb-pipe ports, real probers driving the existing veto path 3;
+  vendor selection stays open, gated by the 1.1 cross-border check (G1).
 - **Envelope encryption implementation** — the `Payload` envelope is a shape
   today; add KMS-wrapped data keys (8.1), designed so trustee key-splitting can
-  be added later without a data migration.
+  be added later without a data migration. Decided: AES-256-GCM per-item data
+  keys, wrap step behind an interface so Shamir replaces it with no data
+  migration; plaintext never stored or logged (G2).
 - **Auth** — user login, operator login + audit, manual audited account
-  recovery (8.2), admin freeze surface (veto path 4).
+  recovery (8.2), admin freeze surface (veto path 4). Decided: no automated
+  self-serve reset (8.2), unpolicied endpoints deny, injected secrets with
+  overlapping cancel-secret rotation so invariant 1 survives rotation (G3/G4).
+- **Gate:** a security review of the new network + crypto + auth surface
+  against the threat model before the phase is called done (G6). Content size
+  limits arrive as deployment `ContentPolicy` (11.5, G5).
 
 ### Phase H — Completeness
 - Public-release publish to the user-designated destination (§PUBLIC_RELEASE).

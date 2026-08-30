@@ -9,7 +9,10 @@ lifecycle** — all written tests-first, because everything here touches the
 release path where *being wrong is worse than being slow*.
 
 Read `PRODUCT_SPEC.md` (behaviour + invariants), `DECISIONS.md` (why), and
-`CLAUDE.md` (the one rule + invariants) before changing anything.
+`CLAUDE.md` (the one rule + invariants) before changing anything. The
+architecture/product decisions for the not-yet-built network phases are settled
+in `DECISIONS_PHASE_F_G.md` (Phase F — Surfaces & API; Phase G — Integrations &
+security).
 
 ## Layout
 
