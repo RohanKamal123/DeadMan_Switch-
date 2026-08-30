@@ -24,6 +24,7 @@ import type { AuditSink } from '../domain/audit';
 import { computeQuorum, type Confirmation } from '../domain/quorum';
 import { DAY_MS, POST_RELEASE_RETENTION_DAYS, RECIPIENT_FALLBACK_DAYS } from '../domain/config';
 import type { State } from '../domain/states';
+import type { RecipientAccessPolicy } from './access-policy';
 import { issueCode, isCodeValid, type OneTimeCode } from './codes';
 import type { CodeSms, DeliveryMessage, GatedEmail } from './messages';
 
@@ -50,6 +51,10 @@ export interface DeliveryRecord {
   code: OneTimeCode | null;
   linkToken: string | null;
   revoked: boolean;
+  /** Failed entries against the CURRENT code; reset when a fresh code is issued (F4.1). */
+  failedAttempts: number;
+  /** Fresh codes minted for this recipient since activation, throttled by the policy (F4.1). */
+  reissueCount: number;
 }
 
 export interface ReleaseStep {
@@ -91,6 +96,12 @@ export interface ReleaseControllerOptions {
   readonly audit: AuditSink;
   readonly codeGenerator?: () => string;
   readonly linkGenerator?: () => string;
+  /**
+   * Deployment-supplied attempt cap / re-issue throttle (F4.1). When omitted the
+   * caps are not enforced — the numbers are never invented here, exactly as the
+   * content size limits require a `ContentPolicy` (11.5). Composition supplies it.
+   */
+  readonly accessPolicy?: RecipientAccessPolicy;
 }
 
 function randomCode(): string {
@@ -108,6 +119,7 @@ export class ReleaseController {
   private readonly audit: AuditSink;
   private readonly genCode: () => string;
   private readonly genLink: () => string;
+  private readonly accessPolicy: RecipientAccessPolicy | undefined;
 
   private readonly recordList: DeliveryRecord[];
   private activeIndex = -1;
@@ -120,6 +132,7 @@ export class ReleaseController {
     this.audit = options.audit;
     this.genCode = options.codeGenerator ?? randomCode;
     this.genLink = options.linkGenerator ?? randomLink;
+    this.accessPolicy = options.accessPolicy;
     this.recordList = options.recipients.map((r) => ({
       recipientId: r.recipientId,
       status: 'pending',
@@ -128,6 +141,8 @@ export class ReleaseController {
       code: null,
       linkToken: null,
       revoked: false,
+      failedAttempts: 0,
+      reissueCount: 0,
     }));
   }
 
@@ -163,7 +178,24 @@ export class ReleaseController {
     const record = this.recordList[index]!;
     if (record.revoked) return { ok: false, reason: 'access has been revoked' };
     if (record.code === null) return { ok: false, reason: 'no code issued' };
-    if (!isCodeValid(record.code, code, at)) return { ok: false, reason: 'invalid or expired code' };
+    // Attempt cap (F4.1): once the current code has been guessed at too many
+    // times it is dead — even a correct value is refused, forcing a re-issue.
+    // The cap is checked BEFORE validating, so it cannot be bypassed by finally
+    // presenting the right code, and it delays access (the cheap direction).
+    if (this.accessPolicy !== undefined && record.failedAttempts >= this.accessPolicy.maxCodeAttempts) {
+      return { ok: false, reason: 'too many attempts — request a new code' };
+    }
+    if (!isCodeValid(record.code, code, at)) {
+      record.failedAttempts += 1;
+      // Logged as metadata only — never the code, link, or content (invariant 6/7).
+      this.audit.append({
+        at,
+        kind: 'OUTREACH',
+        event: 'RELEASE_ACCESS_FAIL',
+        metadata: { recipientId: record.recipientId, failedAttempts: record.failedAttempts },
+      });
+      return { ok: false, reason: 'invalid or expired code' };
+    }
 
     record.accessedAt = at;
     record.status = 'accessed';
@@ -183,6 +215,10 @@ export class ReleaseController {
     const record = this.recordList[index]!;
     if (record.revoked) return { ok: false, reason: 'access has been revoked' };
     if (record.linkToken === null) return { ok: false, reason: 'recipient not yet activated' };
+    // Re-issue throttle (F4.1): bound how many fresh codes a single link may mint.
+    if (this.accessPolicy !== undefined && record.reissueCount >= this.accessPolicy.maxReissues) {
+      return { ok: false, reason: 're-issue limit reached — contact support' };
+    }
     if (this.privateReleasedAt === null || at - this.privateReleasedAt > POST_RELEASE_RETENTION_DAYS * DAY_MS) {
       return { ok: false, reason: 'outside the retention window' };
     }
@@ -190,11 +226,14 @@ export class ReleaseController {
     if (phone === null) return { ok: false, reason: 'recipient has no phone for SMS' };
 
     record.code = issueCode(this.genCode(), at);
+    // A fresh code opens a fresh attempt budget; the throttle counts the re-issue.
+    record.failedAttempts = 0;
+    record.reissueCount += 1;
     this.audit.append({
       at,
       kind: 'OUTREACH',
       event: 'RELEASE_CODE_REISSUE',
-      metadata: { recipientId },
+      metadata: { recipientId, reissueCount: record.reissueCount },
     });
     return { ok: true, sms: { channel: 'sms', to: phone, code: record.code.value } };
   }
@@ -242,7 +281,13 @@ export class ReleaseController {
       if (saved.recipientId !== this.recordList[i]!.recipientId) {
         throw new Error(`delivery snapshot recipient mismatch at index ${i}`);
       }
-      this.recordList[i] = { ...saved, code: saved.code === null ? null : { ...saved.code } };
+      this.recordList[i] = {
+        ...saved,
+        // Back-compat: snapshots written before F4.1 carry no counters.
+        failedAttempts: saved.failedAttempts ?? 0,
+        reissueCount: saved.reissueCount ?? 0,
+        code: saved.code === null ? null : { ...saved.code },
+      };
     }
     this.activeIndex = snapshot.activeIndex;
   }

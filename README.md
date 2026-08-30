@@ -40,8 +40,34 @@ change, not a code change.
 ```
 npm ci
 npm run typecheck   # tsc --noEmit
-npm test            # jest — 322 tests, tests-first across every tier
+npm test            # jest — 359 tests, tests-first across every tier
 ```
+
+## Running the service
+
+`src/main.ts` is the entrypoint; `src/bootstrap.ts` assembles the whole system
+(the two servers — the cancel surface has its own port/failure domain, F1.4 —
+plus the scheduler driver that ticks the Phase E worker on a clock).
+
+```
+npm run build
+LV_CONFIG_FILE=./config.json \
+LV_CANCEL_SECRET=… LV_SESSION_SECRET=… LV_KMS_MASTER_KEY=<64 hex> \
+LV_TWILIO_ACCOUNT_SID=… LV_TWILIO_AUTH_TOKEN=… LV_TWILIO_FROM=… \
+LV_STORAGE_BASE_URL=… LV_EMAIL_SEND_URL=… \
+npm start
+```
+
+Secrets and vendor credentials come from the **environment** (never committed).
+Non-secret operational values — ports, storage paths, and the deployment
+**policy numbers** (content size limits 11.5, recipient attempt cap F4.1) — come
+from the JSON file named by `LV_CONFIG_FILE`; see `config.example.json`. The
+policy values arrive as config, never invented in code (CLAUDE.md). `SIGINT`/
+`SIGTERM` stops the scheduler and closes both ports cleanly.
+
+Not yet production-ready from this entrypoint: the public-release publisher is an
+in-memory stand-in (§PUBLIC_RELEASE destination unwired), the KMS is the local
+dev wrapper (G2.1), and there is no UI for the user/operator/admin JSON APIs.
 
 ## Layout
 

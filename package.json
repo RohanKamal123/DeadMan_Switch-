@@ -4,9 +4,11 @@
   "private": true,
   "description": "Legacy Vault — posthumous message delivery (V1, manual / no-AI). Full stack: guarded state machine, durable audit + persistence, scheduler, application services, four HTTP surfaces, vendor adapters, envelope encryption, and auth.",
   "license": "UNLICENSED",
+  "main": "dist/src/main.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/src/main.js",
     "test": "jest"
   },
   "devDependencies": {

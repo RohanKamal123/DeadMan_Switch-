@@ -7,6 +7,7 @@
 // submits — the code is never placed in a URL.
 
 import { escapeHtml } from './pages';
+import type { RenderableItem } from './recipient-handler';
 
 function doc(title: string, inner: string): string {
   return [
@@ -50,12 +51,45 @@ export function renderCodeEntryPage(account: string, link: string, notice?: stri
   );
 }
 
-/** After a successful unlock. Content rendering/decryption itself is Phase G2. */
-export function renderUnlockedPage(itemCount: number): string {
-  const noun = itemCount === 1 ? 'message' : 'messages';
-  return doc(
-    'Message unlocked',
-    ['<main>', '<h1>Unlocked</h1>', `<p>Your ${noun} ${itemCount === 1 ? 'is' : 'are'} ready — ${itemCount} ${noun}.</p>`, '</main>'].join(''),
+/**
+ * After a successful unlock. Renders each decrypted item server-side (F4/G2):
+ * a note as escaped text, a photo as an inline image, a PDF as an embedded
+ * object — all as data carried in THIS page's body, never in a URL, a query
+ * string, or client storage (invariant 6). An item that could not be decrypted
+ * is acknowledged but its body withheld, so the page never crashes or leaks.
+ * The page shows no recipient id, account id, code, or link.
+ */
+export function renderUnlockedPage(items: readonly RenderableItem[]): string {
+  const count = items.length;
+  const noun = count === 1 ? 'message' : 'messages';
+  const intro =
+    count === 0
+      ? '<p>There is nothing addressed to you here.</p>'
+      : `<p>Your ${noun} ${count === 1 ? 'is' : 'are'} ready — ${count} ${noun}.</p>`;
+  const rendered = items.map((item, i) => renderItem(item, i)).join('');
+  return doc('Message unlocked', ['<main>', '<h1>Unlocked</h1>', intro, rendered, '</main>'].join(''));
+}
+
+/** Render one decrypted item by kind. Binary is embedded as a data URI in the body. */
+function renderItem(item: RenderableItem, index: number): string {
+  const heading = `<h2>Message ${index + 1}</h2>`;
+  if (!item.available || item.content === null) {
+    return `<section>${heading}<p>This item could not be displayed. Please contact support.</p></section>`;
+  }
+  if (item.kind === 'note') {
+    // Text is escaped; whitespace preserved.
+    return `<section>${heading}<pre style="white-space:pre-wrap">${escapeHtml(item.content)}</pre></section>`;
+  }
+  const dataUri = `data:${encodeURIComponent(item.mimeType)};base64,${item.content}`;
+  if (item.kind === 'photo') {
+    return `<section>${heading}<img alt="Shared photo" src="${dataUri}"></section>`;
+  }
+  // pdf
+  return (
+    `<section>${heading}` +
+    `<object type="application/pdf" data="${dataUri}" width="100%" height="600">` +
+    '<p>Your PDF is ready but cannot be shown inline here.</p>' +
+    '</object></section>'
   );
 }
 

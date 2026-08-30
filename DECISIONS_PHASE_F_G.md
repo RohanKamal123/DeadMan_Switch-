@@ -200,9 +200,15 @@ gives them a transport.
     storage per view**; nothing sensitive is placed in a URL, a query
     string, or client storage (consistent with invariant 6's spirit that
     channels never leak content, UX §2/§4).
-- **F4.1 — OPEN:** the numeric attempt cap and re-issue throttle are
-  deployment config (a `RecipientAccessPolicy`, mirroring how content size
-  limits are handled, 11.5), never a threshold invented in the domain.
+- **F4.1 — BUILT; values remain deployment config:** the attempt cap /
+  re-issue throttle now ship as a `RecipientAccessPolicy`
+  (`src/delivery/access-policy.ts`), enforced in the release controller — a
+  per-code attempt cap that, once exhausted, refuses even a correct code until
+  re-issue, plus a throttle bounding fresh codes per link; failed attempts are
+  logged as metadata only (invariant 6/7). Code verification is constant-time
+  (F4). The two numbers are supplied per deployment (mirroring how content size
+  limits are handled, 11.5), never a threshold invented in the domain — absent a
+  policy no cap is imposed.
 
 ## F5. Every surface fails safe — **DECIDED (invariant-preserving)**
 
@@ -254,10 +260,26 @@ gives them a transport.
   veto path 3 that already blocks entry to VERIFYING. The adapters are
   **dumb pipes** — they send/store/probe and report success or failure;
   they make no state decision (Preamble).
-- **G1.1 — OPEN:** concrete vendor selection (which email/SMS/storage
-  providers) and their credentials are a deployment decision, gated by the
-  1.1 data-localization / cross-border check for vendors sitting abroad.
-  The interface ships regardless of which vendor is chosen.
+- **G1.1 — VENDORS SELECTED + WIRED; credentials remain deployment config:**
+  the concrete adapters ship behind the ports (`src/adapters/channels/`), each a
+  dumb pipe over Node's own http/https with NO vendor SDK, so no import escapes
+  the adapter directory and swapping a vendor is a one-file change (G1):
+  - **SMS → Twilio** (`twilio.ts`), the security-critical separate channel for
+    the release code; it speaks Twilio's REST API directly.
+  - **Storage → the operator's own VPS** (`vps-storage.ts`) over a simple
+    key/blob HTTP surface. Keeping content on operator-controlled infrastructure
+    keeps the **1.1 cross-border gate a deployment decision, not a foreign
+    transfer** — the store's location is chosen by config.
+  - **Email → a vendor-neutral HTTP endpoint** (`http-email.ts`); the endpoint
+    (a self-hosted relay or any provider's HTTP API) is deployment config, so
+    naming an email vendor stays a config change and does not itself resolve 1.1.
+  Because `EmailPort`/`SmsPort`/`StoragePort` are synchronous, sends are
+  fire-and-forget and `probe()` returns a **real, cached health signal** (last
+  send/probe outcome, or a canary round-trip for storage) that drives the same
+  veto path 3 (§6) — an outage delays, it never releases. Credentials are
+  injected from the environment (`vendors.ts`, G4), never committed or logged.
+  Push has no chosen vendor and is not a health dependency, so it stays on the
+  in-memory port until one is selected.
 
 ## G2. Envelope encryption — implement the shape that Phase C fixed — **DECIDED**
 
@@ -348,12 +370,15 @@ piece:
 
 - **F1.5** — cancel-surface deployment topology (separate process/host).
   Ops, before pilot launch.
-- **F4.1** — recipient-access attempt cap / re-issue throttle
-  (`RecipientAccessPolicy`). Deployment config.
+- **F4.1** — recipient-access attempt cap / re-issue throttle. **Mechanism
+  built** (`RecipientAccessPolicy`, enforced in the release controller); only
+  the two numeric values remain deployment config.
 - **F6 / 11.6** — minors / legal-capacity rule. Gate placement decided;
-  rule pending counsel.
-- **G1.1** — vendor selection + credentials, gated by the 1.1
-  data-localization check for abroad vendors.
+  rule pending counsel. **Still untouched** — needs the legal decision first.
+- **G1.1** — vendor selection **DONE** (Twilio SMS, own-VPS storage, neutral
+  HTTP email) and wired behind the ports; only the credentials/endpoints remain
+  deployment config. The 1.1 cross-border check stays a deployment decision
+  (self-hosted storage; email endpoint chosen by config).
 - **G2.1** — KMS provider + master-key rotation cadence. Deployment config.
 - **G5 / 11.5** — content size limits (`ContentPolicy`). Deployment config.
 - **2.3 / 11.2** — automated dormancy/lapse policy. Still deferred to
