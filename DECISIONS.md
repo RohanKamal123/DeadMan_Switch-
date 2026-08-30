@@ -508,26 +508,33 @@ the highest-SLO surface first. In brief:
     console, recipient page, admin) plus the cancel surface are built behind the
     application-service tier, tested; no surface writes state directly.
 
-### Phase G — Integrations & security — **DECISIONS SETTLED** (`DECISIONS_PHASE_F_G.md`)
-Architecture and product decisions for this phase are settled in
-`DECISIONS_PHASE_F_G.md` (Phase G, items G1–G6); implementation follows F. The
-concrete work items, now with decisions attached:
-- **Vendor adapters** behind interfaces — email / SMS / storage — plugged into
-  the health check's probers. No SDK import outside its adapter directory.
-  Decided: dumb-pipe ports, real probers driving the existing veto path 3;
-  vendor selection stays open, gated by the 1.1 cross-border check (G1).
-- **Envelope encryption implementation** — the `Payload` envelope is a shape
-  today; add KMS-wrapped data keys (8.1), designed so trustee key-splitting can
-  be added later without a data migration. Decided: AES-256-GCM per-item data
-  keys, wrap step behind an interface so Shamir replaces it with no data
-  migration; plaintext never stored or logged (G2).
-- **Auth** — user login, operator login + audit, manual audited account
-  recovery (8.2), admin freeze surface (veto path 4). Decided: no automated
-  self-serve reset (8.2), unpolicied endpoints deny, injected secrets with
-  overlapping cancel-secret rotation so invariant 1 survives rotation (G3/G4).
-- **Gate:** a security review of the new network + crypto + auth surface
-  against the threat model before the phase is called done (G6). Content size
-  limits arrive as deployment `ContentPolicy` (11.5, G5).
+### Phase G — Integrations & security — **IN PROGRESS** (decisions in `DECISIONS_PHASE_F_G.md`)
+Architecture/product decisions are settled in `DECISIONS_PHASE_F_G.md`
+(G1–G6). Built so far:
+- **Vendor adapters — DONE (G1).** `src/adapters/channels/`: `EmailPort` /
+  `SmsPort` / `PushPort` / `StoragePort` interfaces + in-memory adapters (real
+  vendor is G1.1, still OPEN). `dependencyProbers` drives the existing weekly
+  health check → veto path 3; `ChannelReminderSender`/`ChannelAlertSender`
+  implement the runtime sender interfaces; `DeliveryDispatcher` sends the gated
+  link by email and the code by SMS on separate channels (invariant 6). No SDK
+  imported outside an adapter dir.
+- **Envelope encryption — DONE (G2).** `src/adapters/crypto/`: `EnvelopeCrypto`
+  seals content into the existing envelope shape — AES-256-GCM per-item data
+  key, authenticated (tamper caught on open), wrapped by a company master key.
+  The wrap is behind a `KeyWrapper` interface so Shamir replaces it with no data
+  migration (8.1); plaintext never stored or logged.
+- **Auth — DONE (G3).** `src/adapters/auth/`: scrypt password hashing, a
+  `CredentialStore` (no plaintext), stateless HMAC-signed sessions +
+  `SessionAuthenticator` (drops into the Phase F auth seam), and `AuthService`
+  (login, enroll, and admin-only manual recovery — the sole reset path, audited;
+  NO self-serve reset, 8.2). `handleLogin` issues sessions.
+- **Secrets — DONE (G4).** `src/adapters/secrets.ts`: all secrets injected from
+  env, never logged; the cancel secret rotates with overlapping validity
+  (`CancelService` verifies against [current, ...previous]) so invariant 1
+  survives a rotation.
+- **Still to build in G:** wiring the crypto into authoring/recipient decrypt
+  (G2 end-to-end), and the security-review gate (G6). Content size limits arrive
+  as deployment `ContentPolicy` (11.5, G5).
 
 ### Phase H — Completeness
 - Public-release publish to the user-designated destination (§PUBLIC_RELEASE).

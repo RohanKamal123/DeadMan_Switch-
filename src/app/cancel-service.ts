@@ -29,8 +29,14 @@ export interface CancelServiceOptions {
   readonly machines: MachineRepository;
   /** The durable, per-account audit sink so a cancellation is logged (invariant 7). */
   readonly auditFor: AuditSinkFactory;
-  /** The HMAC signing secret for cancel tokens (DECISIONS_PHASE_F_G.md G4). */
-  readonly secret: string;
+  /**
+   * The HMAC signing secret(s) for cancel tokens (DECISIONS_PHASE_F_G.md G4).
+   * Pass a single secret, or [current, ...previous] for overlapping-validity
+   * rotation: tokens are issued with the current secret and verified against all,
+   * so a rotation never invalidates a link a living user is about to click
+   * (invariant 1 survives rotation).
+   */
+  readonly secret: string | readonly string[];
 }
 
 export type CancelPreview =
@@ -44,17 +50,28 @@ export type CancelOutcome =
 export class CancelService {
   private readonly machines: MachineRepository;
   private readonly auditFor: AuditSinkFactory;
-  private readonly secret: string;
+  /** [current, ...previous]. Issue with the first; verify against all (rotation). */
+  private readonly secrets: readonly string[];
 
   constructor(options: CancelServiceOptions) {
     this.machines = options.machines;
     this.auditFor = options.auditFor;
-    this.secret = options.secret;
+    this.secrets = typeof options.secret === 'string' ? [options.secret] : options.secret;
+    if (this.secrets.length === 0) throw new Error('CancelService requires at least one secret');
   }
 
   /** Issue a signed cancel token for an account (embedded in NUDGE/HOLD outreach). */
   issueToken(accountId: string, at: number): string {
-    return issueCancelToken(accountId, at, this.secret);
+    return issueCancelToken(accountId, at, this.secrets[0]!);
+  }
+
+  /** Verify a token against any current-or-previous secret (overlapping-validity rotation). */
+  private verify(token: string, at: number): CancelPreview {
+    for (const secret of this.secrets) {
+      const verified = verifyCancelToken(token, secret, at);
+      if (verified.ok) return { ok: true, accountId: verified.accountId };
+    }
+    return { ok: false, reason: 'invalid token' };
   }
 
   /**
@@ -62,9 +79,7 @@ export class CancelService {
    * prefetch or a mail-scanner fetch can never advance the machine (F1.1).
    */
   preview(token: string, at: number): CancelPreview {
-    const verified = verifyCancelToken(token, this.secret, at);
-    if (!verified.ok) return { ok: false, reason: verified.reason };
-    return { ok: true, accountId: verified.accountId };
+    return this.verify(token, at);
   }
 
   /**
@@ -74,7 +89,7 @@ export class CancelService {
    * so the caller renders the fail-safe page instead of a false "done".
    */
   redeem(token: string, at: number): CancelOutcome {
-    const verified = verifyCancelToken(token, this.secret, at);
+    const verified = this.verify(token, at);
     if (!verified.ok) return { ok: false, reason: verified.reason };
 
     const machine = this.machines.load(verified.accountId, this.auditFor(verified.accountId));

@@ -16,4 +16,5 @@ export * from './operator-handler';
 export * from './recipient-handler';
 export * from './user-handler';
 export * from './admin-handler';
+export * from './login-handler';
 export * from './server';

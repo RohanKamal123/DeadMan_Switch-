@@ -6,3 +6,5 @@
 
 export * from './channels';
 export * from './crypto';
+export * from './auth';
+export * from './secrets';
