@@ -13,3 +13,4 @@ export * from './app';
 export * from './http';
 export * from './adapters';
 export * from './composition';
+export * from './bootstrap';

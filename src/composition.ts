@@ -14,6 +14,7 @@ import { randomBytes, randomInt } from 'node:crypto';
 import { EnvelopeCrypto, LocalKeyWrapper } from './adapters/crypto';
 import { CredentialStore, SessionAuthenticator, AuthService } from './adapters/auth';
 import type { Channels, PublicPublisher } from './adapters/channels';
+import { ChannelAlertSender, ChannelReminderSender, dependencyProbers } from './adapters/channels';
 import type { Secrets } from './adapters/secrets';
 import {
   AdminService,
@@ -38,7 +39,7 @@ import {
   ReleasePlanRepository,
   type KeyValueStore,
 } from './persistence';
-import type { AuditSinkFactory } from './runtime';
+import { Scheduler, SchedulerDriver, type AuditSinkFactory } from './runtime';
 import {
   createCancelServer,
   createNodeServer,
@@ -77,6 +78,8 @@ export interface AppConfig {
   readonly gatedBaseUrl: string;
   /** Support / in-app-cancel links shown on the cancel fail-safe page. */
   readonly cancelFallback: CancelFallback;
+  /** How often the scheduler driver runs due work, in ms (Phase E). */
+  readonly schedulerIntervalMs: number;
   readonly now: () => number;
 }
 
@@ -177,4 +180,44 @@ export function createServers(config: AppConfig, metrics?: RequestMetrics): Serv
   const cancelServer = createCancelServer(cancelDeps, metrics === undefined ? {} : { metrics });
   const apiServer = createNodeServer(apiRoute(services, config.now));
   return { cancelServer, apiServer, services };
+}
+
+/**
+ * Build the Phase E worker over the same persisted state the surfaces use. Its
+ * reminders and health alerts go out over the real channels; its probers are the
+ * real vendor probes, so a failing dependency drives veto path 3 (§6). The
+ * scheduler mutates only through `machine.apply` → `transition` — it writes no
+ * state directly (Preamble).
+ */
+export function buildScheduler(config: AppConfig): Scheduler {
+  return new Scheduler({
+    machines: new MachineRepository(config.state),
+    cursorStore: config.cursors,
+    auditFor: config.auditFor,
+    reminderSender: new ChannelReminderSender(config.channels),
+    alertSender: new ChannelAlertSender({ channels: config.channels, opsEmail: config.opsEmail }),
+    probers: dependencyProbers(config.channels),
+  });
+}
+
+export interface Runtime extends Servers {
+  readonly scheduler: Scheduler;
+  /** The driver that ticks the scheduler; not started — call `.start()`. */
+  readonly driver: SchedulerDriver;
+}
+
+/**
+ * Assemble the whole runnable system: the two servers, the application services,
+ * the scheduler, and its driver. Nothing is started — the entrypoint (`main.ts`)
+ * seeds health, calls `.listen(...)` on the servers, and `.start()` on the driver.
+ */
+export function createRuntime(config: AppConfig, metrics?: RequestMetrics): Runtime {
+  const { cancelServer, apiServer, services } = createServers(config, metrics);
+  const scheduler = buildScheduler(config);
+  const driver = new SchedulerDriver({
+    scheduler,
+    intervalMs: config.schedulerIntervalMs,
+    now: config.now,
+  });
+  return { cancelServer, apiServer, services, scheduler, driver };
 }

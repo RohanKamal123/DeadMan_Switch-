@@ -79,6 +79,7 @@ describe('composition (wired servers)', () => {
       publisher: new InMemoryPublicPublisher(),
       contentPolicy: POLICY,
       recipientAccessPolicy: ACCESS_POLICY,
+      schedulerIntervalMs: 60_000,
       sessionTtlMs: 3_600_000,
       opsEmail: 'ops@x.test',
       gatedBaseUrl: 'https://app.test/release',
@@ -144,7 +145,7 @@ describe('composition (wired servers)', () => {
       state: s, cursors: new InMemoryKeyValueStore(), credentials: new InMemoryKeyValueStore(), auditFor,
       secrets: { cancelTokenSecrets: ['c'], sessionSecret: 's', kmsMasterKey: randomBytes(32) },
       channels: { email: new InMemoryEmailAdapter(), sms: new InMemorySmsAdapter(), push: new InMemoryPushAdapter(), storage: new InMemoryStorageAdapter() },
-      publisher: new InMemoryPublicPublisher(), contentPolicy: POLICY, recipientAccessPolicy: ACCESS_POLICY, sessionTtlMs: 1000, opsEmail: 'o@t.test',
+      publisher: new InMemoryPublicPublisher(), contentPolicy: POLICY, recipientAccessPolicy: ACCESS_POLICY, schedulerIntervalMs: 60_000, sessionTtlMs: 1000, opsEmail: 'o@t.test',
       gatedBaseUrl: 'https://app.test/release', cancelFallback: {}, now: () => 1000,
     };
     const services = buildServices(config);
