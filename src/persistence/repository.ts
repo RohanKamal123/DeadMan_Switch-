@@ -229,3 +229,21 @@ export class ReleasePlanRepository extends SnapshotRepository<ReleasePlan> {
     super(store, 'release-plan');
   }
 }
+
+// --- recipient delivery order (per account) ---------------------------------
+
+/**
+ * The user-defined delivery order (PRODUCT_SPEC.md §7). Stored as data because
+ * the release engine must never derive an order; `ReleaseService.begin` reads it
+ * and passes it in. Set through the people service, which validates it against
+ * the current roster.
+ */
+export interface RecipientOrder {
+  readonly order: readonly string[];
+}
+
+export class RecipientOrderRepository extends SnapshotRepository<RecipientOrder> {
+  constructor(store: KeyValueStore) {
+    super(store, 'recipient-order');
+  }
+}

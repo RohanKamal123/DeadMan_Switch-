@@ -13,4 +13,5 @@ export * from './cancel-handler';
 export * from './checkin-handler';
 export * from './operator-handler';
 export * from './recipient-handler';
+export * from './user-handler';
 export * from './server';

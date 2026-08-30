@@ -484,8 +484,18 @@ the highest-SLO surface first. In brief:
     while the account is in a release state (a later cancel denies it), every
     access is logged as metadata only (invariant 6/7), and no page shows
     content, the code, or a recipient id. +14 tests.
-  - Still to build in F: people & authoring services (F2, F6), the admin
-    surface (freeze/audit/recovery), and the cancel-SLO metrics (F7).
+  - *People & authoring services (F2, F6)* — `PeopleService` manages the roster
+    and the user-defined recipient order (validated to cover every recipient, so
+    none is silently dropped from the death path); `AuthoringService` manages
+    `Payload` content. Both reuse the domain's existing freeze rule
+    (`isEditable`) so the roster and content are frozen once a release is
+    pending; a contact's group is immutable (invariant 4's source of truth);
+    content is validated against the deployment `ContentPolicy` (11.5), stored
+    as ciphertext only, and addressed only to enrolled recipients. `handleUser`
+    exposes `/me/*` behind the user auth seam, acting only on the caller's own
+    account (no accountId in the body → no cross-account access). +19 tests.
+  - Still to build in F: the admin surface (freeze/audit/recovery) and the
+    cancel-SLO metrics (F7).
 
 ### Phase G — Integrations & security — **DECISIONS SETTLED** (`DECISIONS_PHASE_F_G.md`)
 Architecture and product decisions for this phase are settled in
