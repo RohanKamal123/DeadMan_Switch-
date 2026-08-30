@@ -68,12 +68,22 @@ automated-call-consent business. More conservative, not less.
 
 ## 1. Jurisdiction & legal
 
-### 1.1 Primary launch jurisdiction — **OPEN**
-- **Decision:** OPEN. Options: US (TCPA + state privacy + RUFADAA) · UK
-  (UK GDPR + PECR) · a single EU member state (GDPR + ePrivacy).
-- **Resolving action:** Pick the launch jurisdiction. Now a *light* input
-  (gates audit-log horizon in 5.3 and a consent check in 1.3), no longer a
-  hard V1 blocker since automated calls are gone.
+### 1.1 Primary launch jurisdiction — **DECIDED**
+- **Decision:** **Bangladesh.** V1 launches to a Bangladesh pilot.
+- **Reason:** Founder/operator base and small pilot scale (7.1) keep the
+  product manageable under a single jurisdiction.
+- **Legal follow-ups (with local counsel; none a V1 blocker):**
+  - Confirm the audit-log 2-year metadata horizon (5.3) against Bangladesh
+    record-keeping norms; change it only by explicit decision.
+  - Enrollment-consent wording (1.3): human outreach is lightly regulated;
+    confirm the stored consent timestamp is locally sufficient.
+  - The legal layer (1.2, spec §8) is advisory only — there is no
+    RUFADAA-style statute granting executor authority over digital assets
+    here; advisory copy must reflect Bangladesh succession practice and
+    flag cross-border recipients.
+  - Data localization / cross-border transfer: if email/SMS/storage vendors
+    sit abroad, check Bangladesh's draft data-protection provisions before
+    scaling past pilot (revisit with 7.2).
 
 ### 1.2 The legal layer (will / executor authority) — **DECIDED**
 - **Decision:** The product only **advises** — shows guidance on naming
@@ -170,19 +180,22 @@ automated-call-consent business. More conservative, not less.
   72h one-time access code is re-issuable within this window. "Final
   release" = the last release event on the account.
 
-### 5.2 User self-deletion while alive — **DECIDED (N OPEN)**
-- **Decision:** **Soft delete + grace period, then hard delete.** Content
-  is erased on hard delete; the immutable audit log keeps **metadata only,
-  never content.**
-- **OPEN:** Grace-period length **N** — pick alongside the account-
-  lifecycle policy.
+### 5.2 User self-deletion while alive — **DECIDED**
+- **Decision:** **Soft delete + 7-day grace period, then hard delete.**
+  Content is erased on hard delete; the immutable audit log keeps
+  **metadata only, never content.**
+- **Reason:** 7 days honors a genuine delete request promptly while leaving
+  a window to reverse a deletion forced by an attacker who seized the
+  account (recovery is manual, 8.2). Recovery within the window is manual
+  and logged (invariant 7).
 
 ### 5.3 Audit log retention — **DECIDED (horizon depends on 1.1)**
 - **Decision:** **Metadata only, retained 2 years.** Stores timestamps,
   channels, outcomes, operator actions, and state transitions — never
   content, URLs, or codes. Content purges never touch the audit trail.
-- **Note:** 2 years may be short for some jurisdictions' dispute needs;
-  revisit once 1.1 is set.
+- **Note:** Jurisdiction is Bangladesh (1.1); confirm the 2-year horizon
+  against local record-keeping norms with counsel. Change only by explicit
+  decision.
 
 ---
 
@@ -241,12 +254,20 @@ automated-call-consent business. More conservative, not less.
 
 ## 9. Content authoring interface
 
-### 9.1 How users create/store content — **CAPTURED, detail OPEN**
+### 9.1 How users create/store content — **DECIDED (shape); size limits OPEN**
 - **Captured:** A notepad-like authoring interface for writing directly,
   plus writing/saving content as PDFs. Photos are named in the spec intro.
-- **OPEN detail:** supported formats, size limits, edit-after-save
-  behavior — define in Phase B (UX) and Phase C (schema, `Payload`). All
-  stored content is encrypted at rest (§7, 8.1) regardless of format.
+- **Phase C `Payload` schema (`src/domain/payload.ts`):** fixes the content
+  model *shape* — kinds (`note` / `photo` / `pdf`), the envelope-encryption
+  structure (per-item data key wrapped by a company KMS key, shaped so trustee
+  key-splitting can be added later without a data migration, 8.1), addressing
+  to recipients (UX §1.4), item versioning, and the freeze rule (authoring
+  stops once a release is pending). Content is only ever stored as ciphertext;
+  there is no plaintext field.
+- **Still OPEN — size limits:** the concrete per-kind byte limits are a
+  deployment decision (11.5), supplied to the schema as a `ContentPolicy` and
+  enforced there, **never invented in the domain** (CLAUDE.md forbids a
+  threshold the spec is silent on).
 
 ---
 
@@ -288,14 +309,17 @@ automated-call-consent business. More conservative, not less.
 
 ## 11. Still open
 
-- **11.1 Jurisdiction (1.1)** — light input for 5.3 and 1.3; not a V1
-  blocker.
+- **11.1 Jurisdiction (1.1)** — **RESOLVED: Bangladesh.** Legal follow-ups
+  with counsel are noted in 1.1; none is a V1 blocker.
 - **11.2 Automated dormancy policy (2.3)** — before scaling past pilot.
-- **11.3 Soft-delete grace length N (5.2)** — never introduce the timer
-  without an explicit decision (CLAUDE.md rule).
-- **11.4 Recipient-fallback silence window "N days" (spec §7)** — set in
-  Phase C; same no-unspecified-timer rule.
-- **11.5 Content-model detail (9.1)** — Phase B/C.
+- **11.3 Soft-delete grace length N (5.2)** — **RESOLVED: 7 days.**
+- **11.4 Recipient-fallback silence window (spec §7)** — **RESOLVED: 14
+  days**, comfortably under the 30-day post-release purge (5.1).
+- **11.5 Content-model detail (9.1)** — **PARTLY RESOLVED:** formats,
+  versioning, encryption-envelope shape, addressing, and the freeze rule are
+  fixed in the Phase C `Payload` schema (`src/domain/payload.ts`). Numeric
+  **size limits remain OPEN** — supplied per deployment as a `ContentPolicy`,
+  not invented in code.
 - **11.6 Minors / legal capacity** — whether account holders, contacts, or
   recipients may be minors; decide with jurisdiction (1.1) and counsel.
 
@@ -317,8 +341,120 @@ automated-call-consent business. More conservative, not less.
   re-issuable (4.2); no operator ever speaks a link/code/content
   (invariant 6, 4.1).
 - Retention: 30-day post-release then purge (5.1); soft-delete-then-hard
-  for living users (5.2, N TBD); metadata-only audit log, 2 years (5.3).
+  for living users, 7-day grace (5.2); metadata-only audit log, 2 years
+  (5.3).
+- Launch jurisdiction Bangladesh (1.1); recipient fallback after 14 days of
+  silence (spec §7); pilot scale (7.1).
 - Business-hours support + always-on tokenized self-serve cancel (6.1).
 - Pilot scale, founder-run operator review, everything fails safe toward
   delay (7.x).
 - No AI vendors; email/SMS/storage only, weekly health-checked (3.x).
+
+---
+
+## 12. Build phases (engineering roadmap)
+
+A record of what has been built and what comes next. Phases are engineering
+groupings, not new product decisions — none introduces a timer, threshold, or
+policy the spec does not already state. Each phase must uphold every invariant
+in `CLAUDE.md` / `PRODUCT_SPEC.md §9`; the ordering follows the one rule (a
+false positive is catastrophic), so the audit trail and the cancel path come
+first.
+
+### Phase A — Product decisions — **DONE**
+This document. Settled the V1 shape, the pivot to manual operations, quorum,
+retention, and the invariants to build against.
+
+### Phase B — UX specification — **DONE**
+`UX_SPEC.md`. The four surfaces (user app, cancel link, operator console,
+recipient page) and the interface expression of every invariant.
+
+### Phase C — Core domain, tests-first — **DONE**
+Pure, in-memory, fully tested (`src/`, 139 tests, CI green). Delivered:
+- the eight-state machine behind one guarded `transition` (`src/domain/`),
+- the immutable, metadata-only audit log,
+- the `Payload` content schema (shape fixed; size limits are deployment config, 11.5),
+- the operator console (`src/console/`) — group-from-roster, consent/stale gates, quorum meter, self-dealing,
+- the private-release delivery engine (`src/delivery/`) — ordered delivery, channel separation, 72h codes, 14-day fallback, revocation,
+- notification cadence + static templates (`src/notifications/`),
+- the signed no-login cancel token (`src/cancel/`),
+- the weekly health check (`src/health/`) and the retention lifecycle (`src/retention/`).
+
+**Not in Phase C (deliberately):** persistence, a runtime that fires timers,
+HTTP surfaces, real vendor integrations, encryption implementation, auth. Those
+are the phases below.
+
+### Phase D — Durability & persistence — **DONE**
+`src/persistence/` (23 tests, CI green). Delivered:
+- **Append-only, tamper-evident audit store (invariant 7).** `HashChainedAuditStore`
+  satisfies the domain `AuditSink` interface, so it drops in wherever the
+  in-memory `AuditLog` was used. Every record carries `hash = H(prevHash · record)`
+  — a hash chain, so any edit, deletion, or reorder breaks the chain and is
+  detected on load (`AuditIntegrityError`) or by `verify()`; a broken chain is
+  refused, never silently trusted. Durability rides on an `AppendOnlySink`
+  (in-memory for tests, JSONL file for production). Metadata-only is enforced at
+  the boundary exactly as before (`assertMetadataSafe`). Retention horizon =
+  **2 years** (`AUDIT_RETENTION_DAYS`, 5.3), exposed as a query; execution of a
+  prune is a Phase E scheduler concern.
+- **State repositories.** Snapshot repositories over a `KeyValueStore`
+  (in-memory / JSON file) for accounts, machine context (which carries
+  confirmations), payloads, operator case files, and delivery records — all
+  survive a restart. `MachineRepository.load` rebuilds a `Machine` via
+  `Machine.restore`; further changes still go back through `apply` → `transition`.
+- **Preserved:** no ad-hoc status writes (a repository only persists/reloads a
+  context `transition` produced — it has no method that sets a state), and the
+  content/audit separation (operational data — notes, codes, links — lives in
+  the KV repositories, never in the append-only trail).
+
+### Phase E — Runtime & scheduler — **DONE**
+`src/runtime/` (26 tests, CI green). Delivered:
+- **The worker that fires time events** — `Scheduler.tickAccount` advances
+  `MISSED_CHECK_IN` (day 7), `REACH_VERIFYING` (day 30), the private release
+  after a HOLD fully elapses, and public release after the 14-day gap. A pure
+  `nextDueEvent(context, now)` planner decides what is due; the worker applies it
+  through `machine.apply` → `transition` only (no ad-hoc status writes), so every
+  guard still holds and the worker can never release early.
+- **Weekly health check** — `Scheduler.tickHealth` runs the dependency probers
+  weekly (§6), feeds the result into every account's dependency-health gate (veto
+  path 3 blocks entry to VERIFYING / starting a HOLD on a broken stack), and
+  alerts the team on failures.
+- **Cadence senders** — `src/notifications/` schedules are wired to channels
+  through a `ReminderSender`; NUDGE and HOLD cancel prompts are rendered from the
+  static templates (no link/code — invariant 6) and sent once, tracked by a
+  per-account tick cursor.
+- **Fail-safe (invariant 5; 7.3)** — the planner never proposes an event out of
+  VERIFYING or STALLED (those are human-gated), and a rejected transition stops
+  the advance loop and leaves the account where it was. A worker outage only
+  DELAYS events; on restart the scheduler re-derives every due timer from the
+  Phase D persisted state and catches up one guarded step at a time.
+
+### Phase F — Surfaces & API
+- **Cancel-link endpoint + page first** (6.1) — the highest-SLO surface; the
+  token logic exists (`src/cancel/`), it needs an HTTP route and the fail-safe
+  page from UX §2 (bad/expired token never dead-ends).
+- **Service/API layer** for the four audiences: user app (check-in, people,
+  authoring), operator console, recipient gated page, admin. Each endpoint maps
+  to a `transition` event or console action — no surface writes state directly.
+
+### Phase G — Integrations & security
+- **Vendor adapters** behind interfaces — email / SMS / storage — plugged into
+  the health check's probers. No SDK import outside its adapter directory.
+- **Envelope encryption implementation** — the `Payload` envelope is a shape
+  today; add KMS-wrapped data keys (8.1), designed so trustee key-splitting can
+  be added later without a data migration.
+- **Auth** — user login, operator login + audit, manual audited account
+  recovery (8.2), admin freeze surface (veto path 4).
+
+### Phase H — Completeness
+- Public-release publish to the user-designated destination (§PUBLIC_RELEASE).
+- Quarterly drill flow (§6) — the primary mitigation for contact rot.
+- A full-lifecycle end-to-end test (ACTIVE → … → PRIVATE_RELEASE) exercised
+  through persistence + the scheduler.
+
+### Still-open product decisions that gate later phases
+- **11.2 Automated dormancy/lapse policy (2.3)** — before scaling past pilot;
+  intersects Phase E (worker) and billing.
+- **11.5 Content size limits** — a `ContentPolicy` value to set before Phase G
+  storage, still not invented in code.
+- **11.6 Minors / legal capacity** — with counsel; gates account/recipient
+  validation in Phase F.
