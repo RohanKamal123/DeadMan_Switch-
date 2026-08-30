@@ -70,7 +70,7 @@ export class PayloadFrozenError extends Error {
   }
 }
 
-function envelopeIsEncrypted(envelope: EncryptionEnvelope): boolean {
+export function envelopeIsEncrypted(envelope: EncryptionEnvelope): boolean {
   return (
     typeof envelope.ciphertext === 'string' &&
     envelope.ciphertext.length > 0 &&
