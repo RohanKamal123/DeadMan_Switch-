@@ -10,6 +10,7 @@
 // tier that mutates — no surface writes state. Secrets are injected (G4); nothing
 // here is hard-coded.
 
+import { randomBytes, randomInt } from 'node:crypto';
 import { EnvelopeCrypto, LocalKeyWrapper } from './adapters/crypto';
 import { CredentialStore, SessionAuthenticator, AuthService } from './adapters/auth';
 import type { Channels, PublicPublisher } from './adapters/channels';
@@ -102,6 +103,15 @@ export function buildServices(config: AppConfig): Services {
   const { auditFor, secrets, channels } = config;
 
   const crypto = new EnvelopeCrypto(new LocalKeyWrapper({ keyId: 'kms-primary', masterKey: secrets.kmsMasterKey }));
+
+  // Crypto-secure generators for the recipient release capability tokens. The
+  // gated link + one-time code are the ONLY thing standing between an attacker
+  // and a deceased user's private content, so they must not use Math.random
+  // (CWE-338). A 6-digit code (kept human-enterable) is paired with a 256-bit
+  // link token; deployment adds the F4.1 attempt cap.
+  const codeGenerator = (): string => String(randomInt(0, 1_000_000)).padStart(6, '0');
+  const linkGenerator = (): string => `gl_${randomBytes(32).toString('base64url')}`;
+  const releaseArgs = { machines, contacts, payloads, plans, deliveries, auditFor, codeGenerator, linkGenerator };
   const credentialStore = new CredentialStore(config.credentials);
   const authenticator = new SessionAuthenticator({ secret: secrets.sessionSecret, now: config.now });
   const auth = new AuthService({ credentials: credentialStore, sessionSecret: secrets.sessionSecret, sessionTtlMs: config.sessionTtlMs, auditFor });
@@ -110,10 +120,10 @@ export function buildServices(config: AppConfig): Services {
     cancel: new CancelService({ machines, auditFor, secret: secrets.cancelTokenSecrets }),
     liveness: new LivenessService({ machines, auditFor }),
     operators: new OperatorService({ machines, contacts, caseFiles, auditFor }),
-    release: new ReleaseService({ machines, contacts, payloads, plans, deliveries, auditFor }),
+    release: new ReleaseService(releaseArgs),
     people: new PeopleService({ contacts, machines, recipientOrders }),
     authoring: new AuthoringService({ payloads, contacts, machines, policy: config.contentPolicy }),
-    admin: new AdminService({ machines, auditFor, release: new ReleaseService({ machines, contacts, payloads, plans, deliveries, auditFor }) }),
+    admin: new AdminService({ machines, auditFor, release: new ReleaseService(releaseArgs) }),
     drill: new DrillService({ contacts, email: channels.email, sms: channels.sms, auditFor }),
     publicRelease: new PublicReleaseService({ machines, publisher: config.publisher, auditFor }),
     auth,

@@ -7,6 +7,7 @@ import * as http from 'node:http';
 import type { AuditSink } from '../../src/domain/audit';
 import { Machine } from '../../src/domain/machine';
 import {
+  ContactRepository,
   HashChainedAuditStore,
   InMemoryAppendOnlySink,
   InMemoryKeyValueStore,
@@ -20,7 +21,7 @@ import {
   InMemorySmsAdapter,
   InMemoryStorageAdapter,
 } from '../../src/adapters';
-import { createServers, type AppConfig } from '../../src/composition';
+import { buildServices, createServers, type AppConfig } from '../../src/composition';
 import type { AuditSinkFactory } from '../../src/runtime';
 import type { ContentPolicy } from '../../src/domain/payload';
 
@@ -116,5 +117,39 @@ describe('composition (wired servers)', () => {
     const res = await request(cancelServer, 'GET', '/cancel?t=garbage');
     expect(res.status).toBe(200);
     expect(res.body).toContain('https://support.test');
+  });
+
+  it('wires crypto-secure recipient tokens (high-entropy link, not Math.random)', () => {
+    // Security review G6: the release capability tokens must not use Math.random.
+    // Drive one release through the wired ReleaseService and inspect the link token.
+    const s = new InMemoryKeyValueStore();
+    const auditFor: AuditSinkFactory = () => new HashChainedAuditStore(new InMemoryAppendOnlySink()) as AuditSink;
+    const machines = new MachineRepository(s);
+    machines.save('acct-2', new Machine({ now: 0, publicReleaseEnabled: false }));
+    // Move it to PRIVATE_RELEASE via a restored context with the needed fields.
+    const ctx = machines.getContext('acct-2')!;
+    machines.save('acct-2', Machine.restore({ ...ctx, state: 'PRIVATE_RELEASE', privateReleasedAt: 1000,
+      confirmations: [
+        { contactId: 'c1', group: 'family', recordingOperatorId: 'op', at: 0 },
+        { contactId: 'c2', group: 'friend', recordingOperatorId: 'op', at: 0 },
+        { contactId: 'c3', group: 'colleague', recordingOperatorId: 'op', at: 0 },
+      ] }));
+    const contacts = new ContactRepository(s);
+    contacts.save('acct-2', { id: 'r1', name: 'r1', group: 'other', roles: ['recipient'], email: 'r@t.test', phone: '+1', consentAt: 0, stale: false });
+
+    const config: AppConfig = {
+      state: s, cursors: new InMemoryKeyValueStore(), credentials: new InMemoryKeyValueStore(), auditFor,
+      secrets: { cancelTokenSecrets: ['c'], sessionSecret: 's', kmsMasterKey: randomBytes(32) },
+      channels: { email: new InMemoryEmailAdapter(), sms: new InMemorySmsAdapter(), push: new InMemoryPushAdapter(), storage: new InMemoryStorageAdapter() },
+      publisher: new InMemoryPublicPublisher(), contentPolicy: POLICY, sessionTtlMs: 1000, opsEmail: 'o@t.test',
+      gatedBaseUrl: 'https://app.test/release', cancelFallback: {}, now: () => 1000,
+    };
+    const services = buildServices(config);
+    const begun = services.release.begin('acct-2', ['r1'], 1000);
+    if (!begun.ok) throw new Error('begin failed');
+    const email = begun.messages.find((m) => m.channel === 'email');
+    if (email?.channel !== 'email') throw new Error('no email');
+    // gl_ + base64url(32 bytes) ≈ 43 chars → far longer/higher-entropy than a Math.random link.
+    expect(email.gatedLink.length).toBeGreaterThan(40);
   });
 });

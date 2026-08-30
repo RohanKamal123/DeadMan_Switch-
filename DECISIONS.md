@@ -535,8 +535,19 @@ Architecture/product decisions are settled in `DECISIONS_PHASE_F_G.md`
 - **G2 end-to-end — DONE:** the lifecycle e2e (Phase H) authors content sealed
   with `EnvelopeCrypto`, releases it through the machine + scheduler, and the
   recipient decrypts the exact plaintext — proving the crypto path composes.
-- **Still to build in G:** the security-review gate (G6). Content size limits
-  arrive as deployment `ContentPolicy` (11.5, G5).
+- **Security review (G6) — DONE.** A focused review of the new network + crypto
+  + auth surface against the threat model. XSS surfaces are clean (all
+  user-influenced HTML is `escapeHtml`'d in text and attribute contexts); tokens
+  are HMAC-SHA256 with constant-time compare and a fixed algorithm; authorization
+  fails closed and enforces ownership from the principal, not the body; the
+  envelope uses AES-256-GCM with a fresh key + random IV and authenticated
+  decryption. **One finding, fixed:** the composition root wired `ReleaseService`
+  with the delivery engine's `Math.random`-based default code/link generators
+  (CWE-338) — the recipient capability tokens are now generated with
+  `node:crypto` (`randomInt` 6-digit code + 256-bit `randomBytes` link). The
+  deferred F4.1 attempt cap still belongs to deployment.
+- Content size limits arrive as deployment `ContentPolicy` (11.5, G5).
+- **Phase G is code-complete.**
 
 ### Phase H — Completeness — **DONE**
 - **Public-release publish (§PUBLIC_RELEASE) — DONE.** `PublicReleaseService`
