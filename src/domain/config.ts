@@ -12,6 +12,9 @@ export const HOUR_MS = 60 * 60 * 1000;
 /** Weekly check-in cadence (PRODUCT_SPEC.md §3 "primary, weekly"; §NUDGE day-7). */
 export const CHECK_IN_PERIOD_DAYS = 7;
 
+/** Weekly automated system health check (PRODUCT_SPEC.md §6 "weekly"; DECISIONS.md 3.2). */
+export const HEALTH_CHECK_PERIOD_DAYS = 7;
+
 /**
  * Day the account leaves NUDGE for VERIFYING (PRODUCT_SPEC.md §NUDGE "Exit to
  * VERIFYING at day 30"). This is the invariant-2 boundary: no third party is

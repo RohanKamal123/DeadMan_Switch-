@@ -406,15 +406,27 @@ are the phases below.
   content/audit separation (operational data — notes, codes, links — lives in
   the KV repositories, never in the append-only trail).
 
-### Phase E — Runtime & scheduler
-- **The worker that fires time events** — `MISSED_CHECK_IN` (day 7),
-  `REACH_VERIFYING` (day 30), the release trigger after a HOLD fully elapses,
-  the weekly health check, and the HOLD/NUDGE cadence sends. The guards already
-  make an early release impossible; the worker's job is reliability so a
-  release is never *late* by accident (the cheap failure, still worth avoiding).
-- **Cadence senders** — wire `src/notifications/` schedules to the channels.
-- Fail-safe: a worker outage must never advance toward release (invariant 5,
-  7.3); on restart it re-derives due timers from persisted state.
+### Phase E — Runtime & scheduler — **DONE**
+`src/runtime/` (26 tests, CI green). Delivered:
+- **The worker that fires time events** — `Scheduler.tickAccount` advances
+  `MISSED_CHECK_IN` (day 7), `REACH_VERIFYING` (day 30), the private release
+  after a HOLD fully elapses, and public release after the 14-day gap. A pure
+  `nextDueEvent(context, now)` planner decides what is due; the worker applies it
+  through `machine.apply` → `transition` only (no ad-hoc status writes), so every
+  guard still holds and the worker can never release early.
+- **Weekly health check** — `Scheduler.tickHealth` runs the dependency probers
+  weekly (§6), feeds the result into every account's dependency-health gate (veto
+  path 3 blocks entry to VERIFYING / starting a HOLD on a broken stack), and
+  alerts the team on failures.
+- **Cadence senders** — `src/notifications/` schedules are wired to channels
+  through a `ReminderSender`; NUDGE and HOLD cancel prompts are rendered from the
+  static templates (no link/code — invariant 6) and sent once, tracked by a
+  per-account tick cursor.
+- **Fail-safe (invariant 5; 7.3)** — the planner never proposes an event out of
+  VERIFYING or STALLED (those are human-gated), and a rejected transition stops
+  the advance loop and leaves the account where it was. A worker outage only
+  DELAYS events; on restart the scheduler re-derives every due timer from the
+  Phase D persisted state and catches up one guarded step at a time.
 
 ### Phase F — Surfaces & API
 - **Cancel-link endpoint + page first** (6.1) — the highest-SLO surface; the
