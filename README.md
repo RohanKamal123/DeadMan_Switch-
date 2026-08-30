@@ -20,6 +20,10 @@ src/domain/
   transition.ts  # THE single guarded transition function (pure)
   machine.ts     # stateful runner: applies transitions, appends the audit log
   payload.ts     # Phase C content schema (shape fixed; size limits are config)
+src/console/
+  contacts.ts    # contact roster: roles, groups, consent, stale flag
+  quorum-meter.ts# read-models: quorum meter, hold readiness, self-dealing
+  console.ts     # OperatorConsole: fires machine events with UI guardrails
 src/adapters/models/   # empty by design — no AI/model dependency in V1
 tests/                 # tests-first suite; one file per invariant + units
 ```
@@ -46,6 +50,24 @@ Every invariant in `PRODUCT_SPEC.md §9` has a dedicated suite:
 | 4 | No two quorum confirmations from the same group | `tests/invariants/invariant-4-group-diversity.test.ts` |
 | 5 | STALLED never auto-advances toward release | `tests/invariants/invariant-5-stalled-never-advances.test.ts` |
 | 6 & 7 | Immutable, metadata-only audit log (no content/URL/code) | `tests/invariants/invariant-6-7-audit.test.ts` |
+
+## Operator console (`src/console/`)
+
+The pivot to manual operations changes what *fires* the machine's events — an
+operator action — not the transition table or the invariants (DECISIONS.md
+10.4). `OperatorConsole` is that surface, and it adds structural guardrails on
+top of the machine:
+
+- a confirmation's **group is read from the enrolled roster**, never typed by
+  the operator, so group diversity (invariant 4) cannot be faked;
+- only a **consented, non-stale confirmer** can be recorded (1.3 / 4.3);
+- the **quorum meter** shows distinct *groups*, not a raw count, and hold
+  readiness explains exactly why Start-HOLD is disabled (§3.3 / §3.4);
+- **self-dealing** eligibility is surfaced per recipient (10.3);
+- there is **no field to attach a link, code, or content to outreach** — the
+  console records outcomes, not messages (invariant 6);
+- free-text notes live in the operational case file; the audit log gets
+  **metadata only** (invariant 7 / 5.3).
 
 ## Deferred / config, not invented
 
