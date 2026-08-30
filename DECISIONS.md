@@ -254,12 +254,20 @@ automated-call-consent business. More conservative, not less.
 
 ## 9. Content authoring interface
 
-### 9.1 How users create/store content — **CAPTURED, detail OPEN**
+### 9.1 How users create/store content — **DECIDED (shape); size limits OPEN**
 - **Captured:** A notepad-like authoring interface for writing directly,
   plus writing/saving content as PDFs. Photos are named in the spec intro.
-- **OPEN detail:** supported formats, size limits, edit-after-save
-  behavior — define in Phase B (UX) and Phase C (schema, `Payload`). All
-  stored content is encrypted at rest (§7, 8.1) regardless of format.
+- **Phase C `Payload` schema (`src/domain/payload.ts`):** fixes the content
+  model *shape* — kinds (`note` / `photo` / `pdf`), the envelope-encryption
+  structure (per-item data key wrapped by a company KMS key, shaped so trustee
+  key-splitting can be added later without a data migration, 8.1), addressing
+  to recipients (UX §1.4), item versioning, and the freeze rule (authoring
+  stops once a release is pending). Content is only ever stored as ciphertext;
+  there is no plaintext field.
+- **Still OPEN — size limits:** the concrete per-kind byte limits are a
+  deployment decision (11.5), supplied to the schema as a `ContentPolicy` and
+  enforced there, **never invented in the domain** (CLAUDE.md forbids a
+  threshold the spec is silent on).
 
 ---
 
@@ -307,8 +315,11 @@ automated-call-consent business. More conservative, not less.
 - **11.3 Soft-delete grace length N (5.2)** — **RESOLVED: 7 days.**
 - **11.4 Recipient-fallback silence window (spec §7)** — **RESOLVED: 14
   days**, comfortably under the 30-day post-release purge (5.1).
-- **11.5 Content-model detail (9.1)** — authoring UX fixed in `UX_SPEC.md`;
-  storage formats/limits/versioning remain for the Phase C `Payload` schema.
+- **11.5 Content-model detail (9.1)** — **PARTLY RESOLVED:** formats,
+  versioning, encryption-envelope shape, addressing, and the freeze rule are
+  fixed in the Phase C `Payload` schema (`src/domain/payload.ts`). Numeric
+  **size limits remain OPEN** — supplied per deployment as a `ContentPolicy`,
+  not invented in code.
 - **11.6 Minors / legal capacity** — whether account holders, contacts, or
   recipients may be minors; decide with jurisdiction (1.1) and counsel.
 
