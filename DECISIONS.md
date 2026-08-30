@@ -449,7 +449,19 @@ the highest-SLO surface first. In brief:
   to a `transition` event or console action — no surface writes state directly.
   Decided: three-tier layering (pure core → application services, the only
   mutating tier → thin HTTP transport), auth as a seam implemented in G, every
-  surface fails safe (F0, F2–F7).
+  surface fails safe (F0, F2–F7). **Started:**
+  - *Auth seam (F3)* — `Principal` (user/operator/admin), an `Authenticator`
+    interface + a dev-only stub (`DevAuthenticator`; real login is G3), and
+    `authorize`, whose fail-safe default DENIES any endpoint with no policy.
+  - *User-app check-in (F2)* — `LivenessService` applies CHECK_IN through the
+    guarded `transition` (only ever resets toward ACTIVE or cancels a pending
+    release; the app can never advance toward release), logged (invariant 7);
+    the `/check-in` endpoint sits behind the auth seam and enforces resource
+    ownership (a user checks in only their own account). +22 tests.
+  - *Node adapter* — a generic `createNodeServer(route)`; `createCancelServer`
+    stays a dedicated build with no vendor-adapter import path (F1.4).
+  - Still to build in F: people & authoring services, operator-console
+    endpoints, the recipient gated page (F4), and the cancel-SLO metrics (F7).
 
 ### Phase G — Integrations & security — **DECISIONS SETTLED** (`DECISIONS_PHASE_F_G.md`)
 Architecture and product decisions for this phase are settled in

@@ -1,18 +1,22 @@
-// Phase F — the thin Node http server for the cancel surface
-// (DECISIONS_PHASE_F_G.md F1.4).
+// Phase F — the thin Node http adapter (DECISIONS_PHASE_F_G.md F0, F1.4).
 //
-// This is the ONLY part of the cancel path that touches a socket. It parses a
-// request into the `HttpRequest` the pure handler expects, calls the handler,
-// and writes the response — no business logic. It imports the app service and
-// the handler, but has NO import path to any vendor adapter, so the cancel
-// surface can be deployed in its own failure domain (F1.4): its uptime, the
-// project's highest SLO (DECISIONS.md 6.1), never depends on email/SMS/storage
-// integrations.
+// The ONLY code on any surface that touches a socket. It parses a request into
+// the transport-neutral `HttpRequest` a pure handler expects, runs the handler,
+// and writes the `HttpResponse` back — no business logic. A `route` is any pure
+// function `HttpRequest -> HttpResponse`.
+//
+// `createCancelServer` builds a server dedicated to the cancel surface. It
+// imports only the cancel handler, which has no import path to any vendor
+// adapter, so the cancel surface — the project's highest SLO (DECISIONS.md 6.1)
+// — can be deployed in its own failure domain (F1.4).
 
 import * as http from 'node:http';
-import { handleCancel, type CancelHandlerDeps, type HttpRequest } from './cancel-handler';
+import { handleCancel, type CancelHandlerDeps } from './cancel-handler';
+import type { HttpRequest, HttpResponse } from './message';
 
-const MAX_BODY_BYTES = 16 * 1024; // a cancel body is a token; cap to shed abuse.
+const MAX_BODY_BYTES = 16 * 1024; // request bodies here are small (a token, a tiny JSON); cap to shed abuse.
+
+export type Route = (req: HttpRequest) => HttpResponse;
 
 function readBody(req: http.IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -32,12 +36,18 @@ function readBody(req: http.IncomingMessage): Promise<string> {
   });
 }
 
-/**
- * Create (but do not start) the cancel server. Call `.listen(...)` on the
- * returned server. Every request routes through the single pure handler, which
- * fails safe on anything unexpected — including a body that never arrives.
- */
-export function createCancelServer(deps: CancelHandlerDeps): http.Server {
+/** Node's header bag to a plain lower-cased string map (drops array-valued headers to their join). */
+function flattenHeaders(raw: http.IncomingHttpHeaders): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (value === undefined) continue;
+    out[key.toLowerCase()] = Array.isArray(value) ? value.join(', ') : value;
+  }
+  return out;
+}
+
+/** Wrap a pure route in a Node server. Does not start it — call `.listen(...)`. */
+export function createNodeServer(route: Route): http.Server {
   return http.createServer((req, res) => {
     void (async () => {
       const url = new URL(req.url ?? '/', 'http://localhost');
@@ -46,25 +56,41 @@ export function createCancelServer(deps: CancelHandlerDeps): http.Server {
 
       let body = '';
       try {
-        if (req.method === 'POST') body = await readBody(req);
+        if (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH') {
+          body = await readBody(req);
+        }
       } catch {
-        // A too-large or aborted body is not a reason to dead-end; the handler
-        // treats a missing token as a fail-safe render.
+        // A too-large or aborted body is not a reason to crash; handlers treat a
+        // missing/empty body as an invalid request and respond accordingly.
         body = '';
       }
 
-      const contentType = req.headers['content-type'];
+      const headers = flattenHeaders(req.headers);
+      const contentType = headers['content-type'];
       const request: HttpRequest = {
         method: req.method ?? 'GET',
         path: url.pathname,
         query,
+        headers,
         body,
         ...(contentType !== undefined ? { contentType } : {}),
       };
 
-      const response = handleCancel(request, deps);
+      let response: HttpResponse;
+      try {
+        response = route(request);
+      } catch {
+        // A route should fail safe on its own; this is a last-resort guard so a
+        // throwing route never crashes the process.
+        response = { status: 500, headers: { 'content-type': 'text/plain; charset=utf-8' }, body: 'error' };
+      }
       res.writeHead(response.status, { ...response.headers });
       res.end(response.body);
     })();
   });
+}
+
+/** A server dedicated to the cancel surface (its own failure domain, F1.4). */
+export function createCancelServer(deps: CancelHandlerDeps): http.Server {
+  return createNodeServer((req) => handleCancel(req, deps));
 }

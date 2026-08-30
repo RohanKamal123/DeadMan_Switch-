@@ -7,4 +7,6 @@
 // (`src/http/`) can stay thin. No service writes state directly; the machine's
 // guards remain the single source of truth for every invariant.
 
+export * from './principal';
 export * from './cancel-service';
+export * from './liveness-service';

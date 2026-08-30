@@ -20,32 +20,13 @@
 //     user without a way out.
 
 import type { CancelService } from '../app';
+import { html, type HttpRequest, type HttpResponse } from './message';
 import { renderConfirmPage, renderFailSafePage, renderSuccessPage, type CancelFallback } from './pages';
-
-export interface HttpRequest {
-  readonly method: string;
-  readonly path: string;
-  readonly query: Readonly<Record<string, string>>;
-  readonly body: string;
-  readonly contentType?: string;
-}
-
-export interface HttpResponse {
-  readonly status: number;
-  readonly headers: Readonly<Record<string, string>>;
-  readonly body: string;
-}
 
 export interface CancelHandlerDeps {
   readonly service: CancelService;
   readonly fallback: CancelFallback;
   readonly now: () => number;
-}
-
-const HTML = { 'content-type': 'text/html; charset=utf-8' } as const;
-
-function html(status: number, body: string): HttpResponse {
-  return { status, headers: HTML, body };
 }
 
 /** Fail-safe page. The single place a stuck user is never left without a way out. */
