@@ -1,0 +1,19 @@
+{
+  "name": "legacy-vault",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Legacy Vault — posthumous message delivery (V1, manual / no-AI). Full stack: guarded state machine, durable audit + persistence, scheduler, application services, four HTTP surfaces, vendor adapters, envelope encryption, and auth.",
+  "license": "UNLICENSED",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "jest"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.12",
+    "@types/node": "^20.14.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.2.5",
+    "typescript": "^5.5.4"
+  }
+}
