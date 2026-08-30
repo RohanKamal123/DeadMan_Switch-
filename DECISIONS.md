@@ -349,3 +349,88 @@ automated-call-consent business. More conservative, not less.
 - Pilot scale, founder-run operator review, everything fails safe toward
   delay (7.x).
 - No AI vendors; email/SMS/storage only, weekly health-checked (3.x).
+
+---
+
+## 12. Build phases (engineering roadmap)
+
+A record of what has been built and what comes next. Phases are engineering
+groupings, not new product decisions — none introduces a timer, threshold, or
+policy the spec does not already state. Each phase must uphold every invariant
+in `CLAUDE.md` / `PRODUCT_SPEC.md §9`; the ordering follows the one rule (a
+false positive is catastrophic), so the audit trail and the cancel path come
+first.
+
+### Phase A — Product decisions — **DONE**
+This document. Settled the V1 shape, the pivot to manual operations, quorum,
+retention, and the invariants to build against.
+
+### Phase B — UX specification — **DONE**
+`UX_SPEC.md`. The four surfaces (user app, cancel link, operator console,
+recipient page) and the interface expression of every invariant.
+
+### Phase C — Core domain, tests-first — **DONE**
+Pure, in-memory, fully tested (`src/`, 139 tests, CI green). Delivered:
+- the eight-state machine behind one guarded `transition` (`src/domain/`),
+- the immutable, metadata-only audit log,
+- the `Payload` content schema (shape fixed; size limits are deployment config, 11.5),
+- the operator console (`src/console/`) — group-from-roster, consent/stale gates, quorum meter, self-dealing,
+- the private-release delivery engine (`src/delivery/`) — ordered delivery, channel separation, 72h codes, 14-day fallback, revocation,
+- notification cadence + static templates (`src/notifications/`),
+- the signed no-login cancel token (`src/cancel/`),
+- the weekly health check (`src/health/`) and the retention lifecycle (`src/retention/`).
+
+**Not in Phase C (deliberately):** persistence, a runtime that fires timers,
+HTTP surfaces, real vendor integrations, encryption implementation, auth. Those
+are the phases below.
+
+### Phase D — Durability & persistence — **NEXT**
+- **Append-only audit store (invariant 7).** The log is an in-memory array
+  today; move it to durable, tamper-evident storage. Nothing is trustworthy
+  until this exists — highest priority. Metadata-only, retained 2 years (5.3).
+- **State repositories.** Persist accounts, machine context, confirmations,
+  payloads, operator case files, and delivery records so state survives a
+  restart. Domain stays pure; repositories sit behind it.
+- Must preserve: no ad-hoc status writes (all state changes still go through
+  `transition`), and the content/audit separation (5.3).
+
+### Phase E — Runtime & scheduler
+- **The worker that fires time events** — `MISSED_CHECK_IN` (day 7),
+  `REACH_VERIFYING` (day 30), the release trigger after a HOLD fully elapses,
+  the weekly health check, and the HOLD/NUDGE cadence sends. The guards already
+  make an early release impossible; the worker's job is reliability so a
+  release is never *late* by accident (the cheap failure, still worth avoiding).
+- **Cadence senders** — wire `src/notifications/` schedules to the channels.
+- Fail-safe: a worker outage must never advance toward release (invariant 5,
+  7.3); on restart it re-derives due timers from persisted state.
+
+### Phase F — Surfaces & API
+- **Cancel-link endpoint + page first** (6.1) — the highest-SLO surface; the
+  token logic exists (`src/cancel/`), it needs an HTTP route and the fail-safe
+  page from UX §2 (bad/expired token never dead-ends).
+- **Service/API layer** for the four audiences: user app (check-in, people,
+  authoring), operator console, recipient gated page, admin. Each endpoint maps
+  to a `transition` event or console action — no surface writes state directly.
+
+### Phase G — Integrations & security
+- **Vendor adapters** behind interfaces — email / SMS / storage — plugged into
+  the health check's probers. No SDK import outside its adapter directory.
+- **Envelope encryption implementation** — the `Payload` envelope is a shape
+  today; add KMS-wrapped data keys (8.1), designed so trustee key-splitting can
+  be added later without a data migration.
+- **Auth** — user login, operator login + audit, manual audited account
+  recovery (8.2), admin freeze surface (veto path 4).
+
+### Phase H — Completeness
+- Public-release publish to the user-designated destination (§PUBLIC_RELEASE).
+- Quarterly drill flow (§6) — the primary mitigation for contact rot.
+- A full-lifecycle end-to-end test (ACTIVE → … → PRIVATE_RELEASE) exercised
+  through persistence + the scheduler.
+
+### Still-open product decisions that gate later phases
+- **11.2 Automated dormancy/lapse policy (2.3)** — before scaling past pilot;
+  intersects Phase E (worker) and billing.
+- **11.5 Content size limits** — a `ContentPolicy` value to set before Phase G
+  storage, still not invented in code.
+- **11.6 Minors / legal capacity** — with counsel; gates account/recipient
+  validation in Phase F.
