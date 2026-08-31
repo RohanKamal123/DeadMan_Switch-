@@ -49,6 +49,24 @@ failure-domain isolation (F1.4/F1.5), split it into its own process/host:
 The code seam was always present; this makes the deployment split a one-variable
 choice.
 
+### The worker — the death-path clock
+
+The `combined` and `api` processes also start the **Phase-E worker**, the clock
+that advances the machine over time: NUDGE reminders, the day-30 move to
+VERIFYING, HOLD cancel-prompts, the HOLD→PRIVATE_RELEASE / PRIVATE→PUBLIC
+transitions, and the weekly dependency health check. Without it nothing advances.
+It can never release early (the guards forbid it); a slow or missed tick only
+ever *delays* — the cheap, safe direction — because each tick re-derives due work
+from persisted state and catches up.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `LV_RUN_WORKER` | `1` | Run the worker in this process. Set `0` to run it elsewhere — but it must run in **exactly one** process (V1 is single-node; DECISIONS.md 7.1). |
+| `LV_WORKER_INTERVAL_MS` | `60000` | How often due work is checked. Purely an operational poll cadence, not a domain timer; all domain deadlines are day-granular, so any sub-day value is safe. |
+
+Private-release *delivery* (the gated email/SMS) stays operator-triggered by
+design (PRODUCT_SPEC.md §PRIVATE_RELEASE) and is not driven by the worker.
+
 ## The four audiences (UI)
 
 The design system (`src/http/design/`) is one server-rendered, dependency-free,

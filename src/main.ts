@@ -14,11 +14,27 @@
 
 import { configFromEnv, serverRole } from './config/bootstrap';
 import { createCancelOnlyServer } from './config/cancel-bootstrap';
-import { createServers } from './composition';
+import { createServers, createWorker, startWorker } from './composition';
 
 function log(message: string): void {
   // eslint-disable-next-line no-console
   console.log(message);
+}
+
+/** Operational poll cadence for the worker (how often due work is checked). Default 60s. */
+function workerIntervalMs(): number {
+  const raw = process.env['LV_WORKER_INTERVAL_MS'];
+  if (raw === undefined || raw === '') return 60_000;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n <= 0) {
+    throw new Error(`LV_WORKER_INTERVAL_MS must be a positive integer, got ${JSON.stringify(raw)}`);
+  }
+  return n;
+}
+
+/** The worker runs in the api/combined process unless explicitly disabled (LV_RUN_WORKER=0). */
+function runWorkerHere(): boolean {
+  return (process.env['LV_RUN_WORKER'] ?? '1') !== '0';
 }
 
 async function main(): Promise<void> {
@@ -37,6 +53,24 @@ async function main(): Promise<void> {
 
   const config = await configFromEnv();
   const { apiServer, cancelServer } = createServers(config);
+
+  // Start the death-path clock (Phase-E worker). Without it, no account ever
+  // advances, no reminder fires, and the weekly health check never runs. It can
+  // never release early (the guards forbid it); a slow tick only ever delays.
+  if (runWorkerHere()) {
+    const intervalMs = workerIntervalMs();
+    startWorker(createWorker(config), {
+      intervalMs,
+      onError: (error) => {
+        // A tick failure delays; it never releases. Log and keep going.
+        // eslint-disable-next-line no-console
+        console.error('[legacy-vault] worker tick failed (will retry next interval):', error);
+      },
+    });
+    log(`[legacy-vault] worker started (tick every ${intervalMs}ms)`);
+  } else {
+    log('[legacy-vault] worker NOT started here (LV_RUN_WORKER=0) — run it in exactly one process.');
+  }
 
   apiServer.listen(port, () => {
     log(`[legacy-vault] web server on :${port}`);

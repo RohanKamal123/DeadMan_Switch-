@@ -13,7 +13,13 @@
 import { randomBytes, randomInt, randomUUID } from 'node:crypto';
 import { EnvelopeCrypto, LocalKeyWrapper, type KeyWrapper } from './adapters/crypto';
 import { CredentialStore, SessionAuthenticator, AuthService } from './adapters/auth';
-import type { Channels, PublicPublisher } from './adapters/channels';
+import {
+  ChannelAlertSender,
+  ChannelReminderSender,
+  dependencyProbers,
+  type Channels,
+  type PublicPublisher,
+} from './adapters/channels';
 import type { Secrets } from './adapters/secrets';
 import {
   AccountService,
@@ -42,7 +48,7 @@ import {
   ReleasePlanRepository,
   type KeyValueStore,
 } from './persistence';
-import type { AuditSinkFactory } from './runtime';
+import { Scheduler, type AuditSinkFactory } from './runtime';
 import {
   createCancelServer,
   createNodeServer,
@@ -248,4 +254,71 @@ export function createServers(config: AppConfig, metrics?: RequestMetrics): Serv
   const cancelServer = createCancelServer(cancelDeps, metrics === undefined ? {} : { metrics });
   const apiServer = createNodeServer(webRoute(services, config));
   return { cancelServer, apiServer, services };
+}
+
+/**
+ * Build the Phase-E worker (the scheduler) wired to the real channel senders and
+ * health probers. This is the clock that advances the death path over time:
+ * NUDGE cadence reminders, the day-30 move to VERIFYING, HOLD cancel-prompts, the
+ * HOLD→PRIVATE_RELEASE / PRIVATE→PUBLIC transitions, and the weekly dependency
+ * health check (veto path 3). It never releases early — the guards forbid it — so
+ * a slow or missed tick only ever *delays* (the cheap, safe direction).
+ *
+ * Private-release DELIVERY (the gated email/SMS dispatch) stays operator-
+ * triggered by design (PRODUCT_SPEC.md §PRIVATE_RELEASE), so it is deliberately
+ * not driven from here.
+ */
+export function createWorker(config: AppConfig): Scheduler {
+  return new Scheduler({
+    machines: new MachineRepository(config.state),
+    cursorStore: config.cursors,
+    auditFor: config.auditFor,
+    reminderSender: new ChannelReminderSender(config.channels),
+    alertSender: new ChannelAlertSender({ channels: config.channels, opsEmail: config.opsEmail }),
+    probers: dependencyProbers(config.channels),
+  });
+}
+
+export interface WorkerHandle {
+  /** Stop the interval. Safe to call more than once. */
+  stop(): void;
+}
+
+export interface StartWorkerOptions {
+  /** Operational poll cadence in ms. Purely how OFTEN due work is checked — never a domain timer. */
+  readonly intervalMs: number;
+  readonly now?: () => number;
+  /** Invoked if a tick throws; the loop continues (an outage delays, never releases). */
+  readonly onError?: (error: unknown) => void;
+}
+
+/**
+ * Run the worker on a fixed interval. The tick is re-entrant-safe over persisted
+ * state (each account's due work is re-derived every tick and a missed interval
+ * is caught up), and a throwing tick is caught so the process never dies on it —
+ * fail safe, the machine simply stays put until the next tick. Runs once
+ * immediately so a fresh boot catches up any work already due.
+ */
+export function startWorker(scheduler: Scheduler, options: StartWorkerOptions): WorkerHandle {
+  const now = options.now ?? ((): number => Date.now());
+  const runOnce = (): void => {
+    try {
+      scheduler.runDueWork(now());
+    } catch (error) {
+      if (options.onError !== undefined) options.onError(error);
+    }
+  };
+  runOnce();
+  const timer = setInterval(runOnce, options.intervalMs);
+  // Do not keep the process alive on the worker alone; the servers own the
+  // lifetime, and a test that forgets to stop() must not hang.
+  if (typeof timer.unref === 'function') timer.unref();
+  let stopped = false;
+  return {
+    stop(): void {
+      if (stopped) return;
+      stopped = true;
+      clearInterval(timer);
+    },
+  };
 }
