@@ -344,18 +344,35 @@ Implements the F3 seam and the security decisions already in `DECISIONS.md`.
 ## Still open after Phases F & G
 
 Carried forward; none blocks starting the phases, each gates a specific
-piece:
+piece. **The deployment-config mechanism for the items below now lives in
+`src/config/bootstrap.ts`** (and `src/config/cancel-bootstrap.ts` for F1.5):
+each is resolved from the environment behind an existing port, with
+conservative defaults, and a named-but-unwired provider **fails the boot**
+rather than falling back to a dev stand-in. What remains OPEN is the
+concrete per-environment choice, not the code seam.
 
 - **F1.5** — cancel-surface deployment topology (separate process/host).
-  Ops, before pilot launch.
+  Resolved by `LV_SERVER_ROLE=combined|api|cancel`; the `cancel` role boots
+  on the state store + `LV_CANCEL_SECRET` alone (no KMS/vendor/billing
+  dependency). Ops picks the topology before pilot launch.
 - **F4.1** — recipient-access attempt cap / re-issue throttle
-  (`RecipientAccessPolicy`). Deployment config.
+  (`RecipientAccessPolicy`). Resolved by `LV_RECIPIENT_CODE_ATTEMPT_CAP`
+  (default 5; `off` disables); enforced in the delivery engine. The number
+  is deployment config.
 - **F6 / 11.6** — minors / legal-capacity rule. Gate placement decided;
   rule pending counsel.
-- **G1.1** — vendor selection + credentials, gated by the 1.1
-  data-localization check for abroad vendors.
-- **G2.1** — KMS provider + master-key rotation cadence. Deployment config.
-- **G5 / 11.5** — content size limits (`ContentPolicy`). Deployment config.
+- **G1.1** — vendor selection + credentials. Resolved by
+  `LV_{EMAIL,SMS,PUSH,STORAGE}_PROVIDER` (default `memory`), gated by the
+  1.1 data-localization check (`LV_VENDOR_DATA_REGION` +
+  `LV_VENDOR_CROSS_BORDER_ACK`). Concrete real-vendor adapters are still to
+  be written — a one-file change behind each port.
+- **G2.1** — KMS provider + master-key rotation cadence. Resolved by
+  `LV_KMS_PROVIDER` (default `local`) + `LV_KMS_KEY_ID` (rotation is a new
+  id + key, envelope re-wrap only). A managed-KMS adapter is still to be
+  written.
+- **G5 / 11.5** — content size limits (`ContentPolicy`). Resolved by
+  `LV_MAX_{NOTE,PHOTO,PDF}_BYTES` (conservative defaults). Deployment
+  config.
 - **2.3 / 11.2** — automated dormancy/lapse policy. Still deferred to
   post-pilot; intersects billing, not F/G directly.
 

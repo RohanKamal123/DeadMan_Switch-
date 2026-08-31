@@ -38,19 +38,30 @@ function required(env: NodeJS.ProcessEnv, name: string): string {
  *   LV_SESSION_SECRET          — session signing secret (required)
  *   LV_KMS_MASTER_KEY          — 64 hex chars = 32 bytes (required)
  */
-export function secretsFromEnv(env: NodeJS.ProcessEnv = process.env): Secrets {
+/**
+ * The cancel-token secret(s) alone — [current, ...previous] for overlapping
+ * validity. This is deliberately separated from `secretsFromEnv` so the isolated
+ * cancel process (F1.5) can boot on ONLY the signing secret and the state store,
+ * with no dependency on the KMS key, session secret, or any vendor credential
+ * that could make invariant 1's surface fail closed (F1.2).
+ */
+export function cancelSecretsFromEnv(env: NodeJS.ProcessEnv = process.env): readonly string[] {
   const current = required(env, 'LV_CANCEL_SECRET');
   const previous = (env['LV_CANCEL_SECRET_PREVIOUS'] ?? '')
     .split(',')
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
+  return [current, ...previous];
+}
+
+export function secretsFromEnv(env: NodeJS.ProcessEnv = process.env): Secrets {
   const masterKeyHex = required(env, 'LV_KMS_MASTER_KEY');
   const kmsMasterKey = Buffer.from(masterKeyHex, 'hex');
   if (kmsMasterKey.length !== 32) {
     throw new MissingSecretError('LV_KMS_MASTER_KEY (must be 64 hex chars / 32 bytes)');
   }
   return {
-    cancelTokenSecrets: [current, ...previous],
+    cancelTokenSecrets: cancelSecretsFromEnv(env),
     sessionSecret: required(env, 'LV_SESSION_SECRET'),
     kmsMasterKey,
   };

@@ -50,6 +50,28 @@ export interface DeliveryRecord {
   code: OneTimeCode | null;
   linkToken: string | null;
   revoked: boolean;
+  /**
+   * Failed code presentations against the CURRENTLY issued code (F4.1). Reset to
+   * zero whenever a fresh code is issued (activation or re-issue). Only meaningful
+   * when a `RecipientAccessPolicy` caps it; absent on snapshots written before the
+   * cap existed, so `restore` defaults it to zero.
+   */
+  attempts: number;
+}
+
+/**
+ * Deployment-supplied recipient-access throttle (DECISIONS_PHASE_F_G.md F4.1).
+ * The numeric cap is a DEPLOYMENT decision, never a threshold invented in the
+ * domain (CLAUDE.md) — this engine only enforces whatever number it is handed,
+ * and enforces no cap at all when handed none.
+ */
+export interface RecipientAccessPolicy {
+  /**
+   * Failed presentations allowed against one issued code before it locks and a
+   * re-issue is required. Throttles guessing of the one-time code without
+   * inventing a spec-silent lockout policy in the domain.
+   */
+  readonly codeAttemptCap: number;
 }
 
 export interface ReleaseStep {
@@ -91,6 +113,8 @@ export interface ReleaseControllerOptions {
   readonly audit: AuditSink;
   readonly codeGenerator?: () => string;
   readonly linkGenerator?: () => string;
+  /** Optional guessing throttle (F4.1). When omitted, no cap is enforced. */
+  readonly accessPolicy?: RecipientAccessPolicy;
 }
 
 function randomCode(): string {
@@ -108,6 +132,7 @@ export class ReleaseController {
   private readonly audit: AuditSink;
   private readonly genCode: () => string;
   private readonly genLink: () => string;
+  private readonly accessPolicy: RecipientAccessPolicy | undefined;
 
   private readonly recordList: DeliveryRecord[];
   private activeIndex = -1;
@@ -120,6 +145,7 @@ export class ReleaseController {
     this.audit = options.audit;
     this.genCode = options.codeGenerator ?? randomCode;
     this.genLink = options.linkGenerator ?? randomLink;
+    this.accessPolicy = options.accessPolicy;
     this.recordList = options.recipients.map((r) => ({
       recipientId: r.recipientId,
       status: 'pending',
@@ -128,6 +154,7 @@ export class ReleaseController {
       code: null,
       linkToken: null,
       revoked: false,
+      attempts: 0,
     }));
   }
 
@@ -163,8 +190,18 @@ export class ReleaseController {
     const record = this.recordList[index]!;
     if (record.revoked) return { ok: false, reason: 'access has been revoked' };
     if (record.code === null) return { ok: false, reason: 'no code issued' };
-    if (!isCodeValid(record.code, code, at)) return { ok: false, reason: 'invalid or expired code' };
+    // F4.1: once the failed-attempt budget for this code is spent, the code
+    // locks and a re-issue is required — even a correct code is refused, so a
+    // guesser cannot stumble onto it on the last try. Reissue resets the budget.
+    if (this.accessPolicy !== undefined && record.attempts >= this.accessPolicy.codeAttemptCap) {
+      return { ok: false, reason: 'too many attempts; request a new code' };
+    }
+    if (!isCodeValid(record.code, code, at)) {
+      record.attempts += 1;
+      return { ok: false, reason: 'invalid or expired code' };
+    }
 
+    record.attempts = 0;
     record.accessedAt = at;
     record.status = 'accessed';
     // Access is logged as metadata only — never the code, link, or content.
@@ -190,6 +227,7 @@ export class ReleaseController {
     if (phone === null) return { ok: false, reason: 'recipient has no phone for SMS' };
 
     record.code = issueCode(this.genCode(), at);
+    record.attempts = 0; // fresh code, fresh guessing budget (F4.1)
     this.audit.append({
       at,
       kind: 'OUTREACH',
@@ -242,7 +280,12 @@ export class ReleaseController {
       if (saved.recipientId !== this.recordList[i]!.recipientId) {
         throw new Error(`delivery snapshot recipient mismatch at index ${i}`);
       }
-      this.recordList[i] = { ...saved, code: saved.code === null ? null : { ...saved.code } };
+      this.recordList[i] = {
+        ...saved,
+        // Snapshots written before the F4.1 cap existed have no `attempts`.
+        attempts: saved.attempts ?? 0,
+        code: saved.code === null ? null : { ...saved.code },
+      };
     }
     this.activeIndex = snapshot.activeIndex;
   }

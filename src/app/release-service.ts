@@ -24,6 +24,7 @@ import {
   ReleaseController,
   type AuthResult,
   type DeliveryMessage,
+  type RecipientAccessPolicy,
   type ReissueResult,
   type ReleaseRecipient,
 } from '../delivery';
@@ -47,6 +48,8 @@ export interface ReleaseServiceOptions {
   readonly auditFor: AuditSinkFactory;
   readonly codeGenerator?: () => string;
   readonly linkGenerator?: () => string;
+  /** Deployment recipient-access throttle (F4.1). Absent → no cap enforced. */
+  readonly accessPolicy?: RecipientAccessPolicy;
 }
 
 export type BeginResult =
@@ -68,6 +71,7 @@ export class ReleaseService {
   private readonly auditFor: AuditSinkFactory;
   private readonly codeGenerator: (() => string) | undefined;
   private readonly linkGenerator: (() => string) | undefined;
+  private readonly accessPolicy: RecipientAccessPolicy | undefined;
 
   constructor(options: ReleaseServiceOptions) {
     this.machines = options.machines;
@@ -78,6 +82,7 @@ export class ReleaseService {
     this.auditFor = options.auditFor;
     this.codeGenerator = options.codeGenerator;
     this.linkGenerator = options.linkGenerator;
+    this.accessPolicy = options.accessPolicy;
   }
 
   /**
@@ -173,6 +178,7 @@ export class ReleaseService {
       audit: this.auditFor(accountId),
       ...(this.codeGenerator !== undefined ? { codeGenerator: this.codeGenerator } : {}),
       ...(this.linkGenerator !== undefined ? { linkGenerator: this.linkGenerator } : {}),
+      ...(this.accessPolicy !== undefined ? { accessPolicy: this.accessPolicy } : {}),
     });
   }
 

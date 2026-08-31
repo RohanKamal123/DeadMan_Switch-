@@ -1,29 +1,26 @@
 // Deployment bootstrap — turns environment variables into a wired AppConfig.
 //
-// This is the single place that chooses concrete backends for a public release:
-// which persistence backend, which payment gateway, and the public-release
-// destination. Everything it selects sits behind a port the rest of the system
-// already depends on, so choosing Postgres over a JSON file, or real Stripe over
-// the in-process fake, is a config change here and nowhere else.
+// This is the single place that chooses concrete backends and vendors for a
+// public release: persistence, payment gateway, public-release destination, the
+// KMS provider (G2.1), the channel vendors (G1.1), and the deployment policy
+// numbers (content sizes, G5/11.5; the recipient access cap, F4.1). Everything it
+// selects sits behind a port the rest of the system already depends on, so
+// choosing Postgres over a file, real Stripe over the fake, or a KMS over the
+// local wrapper is a config change here and nowhere else.
 //
-// Secrets are read through secretsFromEnv (never hard-coded, never logged). What
-// is NOT yet a production vendor — email/SMS/storage — stays on the in-memory
-// adapters with a clear warning, because wiring real channel vendors is the
-// separate G1.1 open item; nothing here pretends they are live.
+// Two rules govern every selection below, both descended from "being wrong is
+// worse than being slow":
+//   1. A selection the operator names but that is NOT wired FAILS THE BOOT — it
+//      never silently falls back to a dev stand-in. An operator who thinks SMS is
+//      live, or that content is KMS-wrapped, must never be quietly running on the
+//      in-memory adapter or the local key.
+//   2. Numbers (byte limits, the attempt cap) are DEPLOYMENT config with
+//      conservative defaults; they are never invented in the domain (CLAUDE.md).
+//
+// Secrets are read through secretsFromEnv (never hard-coded, never logged).
 
 import { randomUUID } from 'node:crypto';
-import {
-  FileKeyValueStore,
-  InMemoryKeyValueStore,
-  PostgresKeyValueStore,
-  SqlKeyValueStore,
-  createPgExecutor,
-  createSqliteDriver,
-  HashChainedAuditStore,
-  FileAppendOnlySink,
-  InMemoryAppendOnlySink,
-  type KeyValueStore,
-} from '../persistence';
+import type { KeyValueStore } from '../persistence';
 import type { AuditSink } from '../domain/audit';
 import type { AuditSinkFactory } from '../runtime';
 import {
@@ -31,64 +28,181 @@ import {
   InMemorySmsAdapter,
   InMemoryPushAdapter,
   InMemoryStorageAdapter,
+  type Channels,
 } from '../adapters/channels';
+import { LocalKeyWrapper, type KeyWrapper } from '../adapters/crypto';
 import { MemorialPublisher } from '../adapters/channels/memorial-publisher';
 import { InMemoryPublicContentSource, MemorialStore } from '../memorial';
 import { StripeBillingGateway } from '../adapters/billing';
 import { FakeBillingGateway, isPlanId, type BillingGateway, type PlanId } from '../billing';
-import { secretsFromEnv } from '../adapters/secrets';
+import { secretsFromEnv, type Secrets } from '../adapters/secrets';
 import type { ContentPolicy } from '../domain/payload';
+import type { RecipientAccessPolicy } from '../delivery';
 import type { AppConfig } from '../composition';
+import { stateBackend, auditFactory } from './state';
 
-const DEFAULT_POLICY: ContentPolicy = {
-  maxBytesByKind: { note: 100_000, photo: 10_000_000, pdf: 25_000_000 },
-  allowedMimeTypes: {
-    note: ['text/plain', 'text/markdown'],
-    photo: ['image/jpeg', 'image/png', 'image/webp'],
-    pdf: ['application/pdf'],
-  },
+// Baseline content limits (DECISIONS.md 11.5). These are DEPLOYMENT defaults, not
+// domain constants — each is overridable per environment; the domain only ever
+// enforces the number it is handed.
+const DEFAULT_MAX_BYTES: Readonly<Record<'note' | 'photo' | 'pdf', number>> = {
+  note: 100_000,
+  photo: 10_000_000,
+  pdf: 25_000_000,
 };
+const ALLOWED_MIME_TYPES: ContentPolicy['allowedMimeTypes'] = {
+  note: ['text/plain', 'text/markdown'],
+  photo: ['image/jpeg', 'image/png', 'image/webp'],
+  pdf: ['application/pdf'],
+};
+
+// Deployment default for the recipient gated-page attempt cap (F4.1). "A small
+// fixed number"; conservative and overridable. The domain enforces whatever cap
+// this resolves to and no cap at all if it is disabled.
+const DEFAULT_CODE_ATTEMPT_CAP = 5;
+
+/** The launch jurisdiction (DECISIONS.md 1.1). A vendor storing data elsewhere is "cross-border". */
+const DOMESTIC_REGIONS = new Set(['bd', 'bangladesh']);
+
+export type ServerRole = 'combined' | 'api' | 'cancel';
 
 function env(name: string, fallback = ''): string {
   return process.env[name] ?? fallback;
 }
 
-/** Build the state KeyValueStore from LV_STATE_BACKEND. Postgres is awaited (init). */
-async function stateBackend(): Promise<KeyValueStore> {
-  const backend = env('LV_STATE_BACKEND', 'file');
-  switch (backend) {
-    case 'memory':
-      return new InMemoryKeyValueStore();
-    case 'file':
-      return new FileKeyValueStore(env('LV_STATE_FILE', './data/state.json'));
-    case 'sqlite':
-      return new SqlKeyValueStore(createSqliteDriver(env('LV_SQLITE_PATH', './data/state.db')));
-    case 'postgres': {
-      const store = new PostgresKeyValueStore({ executor: createPgExecutor(env('LV_DATABASE_URL')) });
-      await store.init();
-      return store;
+function truthy(value: string): boolean {
+  return value === '1' || value.toLowerCase() === 'true' || value.toLowerCase() === 'yes';
+}
+
+/** Parse a positive-integer env override, or fall back. Rejects junk rather than guessing. */
+function intEnv(name: string, fallback: number): number {
+  const raw = env(name);
+  if (raw === '') return fallback;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n <= 0) {
+    throw new Error(`${name} must be a positive integer, got ${JSON.stringify(raw)}`);
+  }
+  return n;
+}
+
+/** Which server(s) this process runs (F1.5). Default is combined (dev / single-node). */
+export function serverRole(e: NodeJS.ProcessEnv = process.env): ServerRole {
+  const role = (e['LV_SERVER_ROLE'] ?? 'combined').toLowerCase();
+  if (role === 'combined' || role === 'api' || role === 'cancel') return role;
+  throw new Error(`unknown LV_SERVER_ROLE: ${role} (expected combined|api|cancel)`);
+}
+
+/** Content byte limits + allowed mime types (G5/11.5), with per-kind overrides. */
+export function contentPolicyFromEnv(e: NodeJS.ProcessEnv = process.env): ContentPolicy {
+  const cap = (name: string, kind: 'note' | 'photo' | 'pdf'): number => {
+    const raw = e[name] ?? '';
+    if (raw === '') return DEFAULT_MAX_BYTES[kind];
+    const n = Number(raw);
+    if (!Number.isInteger(n) || n <= 0) {
+      throw new Error(`${name} must be a positive integer, got ${JSON.stringify(raw)}`);
     }
-    default:
-      throw new Error(`unknown LV_STATE_BACKEND: ${backend}`);
+    return n;
+  };
+  return {
+    maxBytesByKind: {
+      note: cap('LV_MAX_NOTE_BYTES', 'note'),
+      photo: cap('LV_MAX_PHOTO_BYTES', 'photo'),
+      pdf: cap('LV_MAX_PDF_BYTES', 'pdf'),
+    },
+    allowedMimeTypes: ALLOWED_MIME_TYPES,
+  };
+}
+
+/**
+ * Recipient gated-page throttle (F4.1). `LV_RECIPIENT_CODE_ATTEMPT_CAP=off`
+ * disables the cap explicitly (returns undefined → no lockout); any positive
+ * integer sets it; empty uses the conservative default.
+ */
+export function recipientAccessPolicyFromEnv(
+  e: NodeJS.ProcessEnv = process.env,
+): RecipientAccessPolicy | undefined {
+  const raw = e['LV_RECIPIENT_CODE_ATTEMPT_CAP'] ?? '';
+  if (raw.toLowerCase() === 'off') return undefined;
+  if (raw === '') return { codeAttemptCap: DEFAULT_CODE_ATTEMPT_CAP };
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n <= 0) {
+    throw new Error(`LV_RECIPIENT_CODE_ATTEMPT_CAP must be a positive integer or "off", got ${JSON.stringify(raw)}`);
+  }
+  return { codeAttemptCap: n };
+}
+
+/**
+ * Select the KMS key wrapper (G2/G2.1). `local` (default) wraps with the injected
+ * master key; a named external provider is refused until its adapter is wired,
+ * so the operator is never silently running on the local key while believing a
+ * managed KMS is in force. `LV_KMS_KEY_ID` names the wrapping key so rotation is
+ * a config change (new key id + master key) with no envelope migration.
+ */
+export function keyWrapperFromEnv(secrets: Secrets, e: NodeJS.ProcessEnv = process.env): KeyWrapper {
+  const provider = (e['LV_KMS_PROVIDER'] ?? 'local').toLowerCase();
+  const keyId = e['LV_KMS_KEY_ID'] ?? 'kms-primary';
+  if (provider === 'local') {
+    return new LocalKeyWrapper({ keyId, masterKey: secrets.kmsMasterKey });
+  }
+  throw new Error(
+    `LV_KMS_PROVIDER=${provider} is selected but no KMS adapter is wired (G2.1). ` +
+      `A managed-KMS adapter implements KeyWrapper in src/adapters/crypto/; until it exists, ` +
+      `the boot fails rather than silently fall back to the local key. Use LV_KMS_PROVIDER=local for dev.`,
+  );
+}
+
+/**
+ * The data-localization / cross-border gate (DECISIONS.md 1.1). When any real
+ * vendor is selected, its data region must be declared; a region outside the
+ * launch jurisdiction requires an explicit acknowledgement, so cross-border data
+ * flow is a deliberate, recorded choice — never an accident of configuration.
+ */
+function assertVendorDataLocalization(namedProviders: readonly string[], e: NodeJS.ProcessEnv): void {
+  if (namedProviders.length === 0) return; // only memory stand-ins selected
+  const region = (e['LV_VENDOR_DATA_REGION'] ?? '').toLowerCase();
+  if (region === '') {
+    throw new Error(
+      `a real vendor is selected (${namedProviders.join(', ')}) but LV_VENDOR_DATA_REGION is not set — ` +
+        `declare where the vendor stores data (DECISIONS.md 1.1).`,
+    );
+  }
+  if (!DOMESTIC_REGIONS.has(region) && !truthy(e['LV_VENDOR_CROSS_BORDER_ACK'] ?? '')) {
+    throw new Error(
+      `vendor data region "${region}" is outside the launch jurisdiction; set ` +
+        `LV_VENDOR_CROSS_BORDER_ACK=1 to acknowledge cross-border data flow (DECISIONS.md 1.1).`,
+    );
   }
 }
 
-function auditFactory(): AuditSinkFactory {
-  const dir = env('LV_AUDIT_DIR');
-  if (dir === '') {
-    // Dev default: an in-memory tamper-evident sink per account.
-    const sinks = new Map<string, AuditSink>();
-    return (id: string): AuditSink => {
-      let s = sinks.get(id);
-      if (s === undefined) { s = new HashChainedAuditStore(new InMemoryAppendOnlySink()) as AuditSink; sinks.set(id, s); }
-      return s;
-    };
+/**
+ * Select the channel vendors (G1.1). Every channel defaults to the in-memory
+ * stand-in (dev). A named real provider is refused until its adapter is wired —
+ * the adapter is a one-file change behind the existing port — so no death-path
+ * message ever goes silently to the in-memory sink while the operator believes a
+ * real vendor is live. Selecting any real vendor also runs the 1.1 gate.
+ */
+export function channelsFromEnv(e: NodeJS.ProcessEnv = process.env): Channels {
+  const providers = {
+    email: (e['LV_EMAIL_PROVIDER'] ?? 'memory').toLowerCase(),
+    sms: (e['LV_SMS_PROVIDER'] ?? 'memory').toLowerCase(),
+    push: (e['LV_PUSH_PROVIDER'] ?? 'memory').toLowerCase(),
+    storage: (e['LV_STORAGE_PROVIDER'] ?? 'memory').toLowerCase(),
+  };
+  const named = Object.values(providers).filter((p) => p !== 'memory');
+  assertVendorDataLocalization(named, e);
+  for (const [kind, provider] of Object.entries(providers)) {
+    if (provider !== 'memory') {
+      throw new Error(
+        `${kind} provider "${provider}" is selected but no vendor adapter is wired (G1.1). ` +
+          `Implement it behind the ${kind} port in src/adapters/channels/ and select it here; ` +
+          `until then the boot fails rather than route ${kind} to the in-memory dev sink.`,
+      );
+    }
   }
-  const sinks = new Map<string, AuditSink>();
-  return (id: string): AuditSink => {
-    let s = sinks.get(id);
-    if (s === undefined) { s = new HashChainedAuditStore(new FileAppendOnlySink(`${dir}/${id}.log`)) as AuditSink; sinks.set(id, s); }
-    return s;
+  return {
+    email: new InMemoryEmailAdapter(),
+    sms: new InMemorySmsAdapter(),
+    push: new InMemoryPushAdapter(),
+    storage: new InMemoryStorageAdapter(),
   };
 }
 
@@ -111,8 +225,10 @@ function billingGateway(): BillingGateway {
 export async function configFromEnv(): Promise<AppConfig> {
   const state = await stateBackend();
   const auditFor = auditFactory();
+  const secrets = secretsFromEnv();
   const memorials = new MemorialStore(state);
   const publisher = new MemorialPublisher({ source: new InMemoryPublicContentSource(), store: memorials });
+  const channels = channelsFromEnv();
 
   if (env('LV_STRIPE_SECRET_KEY') === '') {
     // eslint-disable-next-line no-console
@@ -122,21 +238,28 @@ export async function configFromEnv(): Promise<AppConfig> {
     // eslint-disable-next-line no-console
     console.warn('[bootstrap] Using the JSON-file state backend. Set LV_STATE_BACKEND=sqlite|postgres for production.');
   }
+  for (const kind of ['EMAIL', 'SMS', 'PUSH', 'STORAGE'] as const) {
+    if ((env(`LV_${kind}_PROVIDER`, 'memory')).toLowerCase() === 'memory') {
+      // eslint-disable-next-line no-console
+      console.warn(`[bootstrap] ${kind} channel is the in-memory dev sink — no real ${kind.toLowerCase()} is sent (G1.1).`);
+    }
+  }
+  if ((env('LV_KMS_PROVIDER', 'local')).toLowerCase() === 'local') {
+    // eslint-disable-next-line no-console
+    console.warn('[bootstrap] KMS provider is the local master-key wrapper. Set LV_KMS_PROVIDER for a managed KMS (G2.1).');
+  }
 
   return {
     state,
     cursors: state,
     credentials: state,
     auditFor,
-    secrets: secretsFromEnv(),
-    channels: {
-      email: new InMemoryEmailAdapter(),
-      sms: new InMemorySmsAdapter(),
-      push: new InMemoryPushAdapter(),
-      storage: new InMemoryStorageAdapter(),
-    },
+    secrets,
+    channels,
     publisher,
-    contentPolicy: DEFAULT_POLICY,
+    contentPolicy: contentPolicyFromEnv(),
+    keyWrapper: keyWrapperFromEnv(secrets),
+    recipientAccessPolicy: recipientAccessPolicyFromEnv(),
     sessionTtlMs: Number(env('LV_SESSION_TTL_MS', String(1000 * 60 * 60 * 24 * 14))),
     opsEmail: env('LV_OPS_EMAIL', 'ops@legacyvault.example'),
     gatedBaseUrl: `${env('LV_BASE_URL', 'http://localhost:8080')}/release`,
@@ -155,3 +278,7 @@ export async function configFromEnv(): Promise<AppConfig> {
 export function newId(prefix: string): string {
   return `${prefix}_${randomUUID()}`;
 }
+
+// Re-exported so callers keep importing the state/audit builders from the bootstrap.
+export { stateBackend, auditFactory };
+export type { KeyValueStore, AuditSink, AuditSinkFactory };

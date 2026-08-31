@@ -35,6 +35,20 @@ public site, legal, memorials, the user app, the operator console, and the JSON
 API; and the isolated **cancel server** (`LV_CANCEL_PORT`, default 8081) — the
 highest-SLO surface, in its own failure domain.
 
+### Server role — cancel-surface topology (`LV_SERVER_ROLE`)
+
+The single process runs both servers by default. To give the cancel surface true
+failure-domain isolation (F1.4/F1.5), split it into its own process/host:
+
+| Value | Runs | Notes |
+|---|---|---|
+| `combined` | web + cancel | default; dev / single-node |
+| `api` | web only | pair with a separate `cancel` process |
+| `cancel` | cancel only | **isolated**: boots on the state store + `LV_CANCEL_SECRET` alone — no KMS, vendor, or billing dependency, so nothing else failing can take the cancel link down |
+
+The code seam was always present; this makes the deployment split a one-variable
+choice.
+
 ## The four audiences (UI)
 
 The design system (`src/http/design/`) is one server-rendered, dependency-free,
@@ -109,8 +123,26 @@ spec insists must ship, and the sub-processor list. They are honest about the V1
 residual risk (the company holds the keys). Launch jurisdiction: Bangladesh
 (DECISIONS.md 1.1). None of it is legal advice.
 
-## What is still an open item
+## Vendor & KMS selection (bootstrap)
 
-Real email / SMS / storage vendors (G1.1) are not wired — those surfaces run on
-the in-memory dev adapters, and the bootstrap says so on startup. Wiring a vendor
-is a one-file adapter behind the existing channel ports.
+`src/config/bootstrap.ts` is the single place a deployment chooses concrete
+vendors, the KMS provider, and the policy numbers — all behind ports the rest of
+the system already depends on. The governing rule: **a provider you name but that
+is not wired fails the boot; it never silently falls back to a dev stand-in.** An
+operator must never believe SMS is live, or content is KMS-wrapped, while it is
+running on the in-memory adapter or the local key.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `LV_KMS_PROVIDER` | `local` | KMS wrapper for envelope encryption (G2/G2.1). `local` uses `LV_KMS_MASTER_KEY`; a named managed KMS needs its adapter wired or the boot fails. |
+| `LV_KMS_KEY_ID` | `kms-primary` | Wrapping-key id stored in the envelope; rotation is a new id + key, no content re-encryption. |
+| `LV_EMAIL_PROVIDER` / `LV_SMS_PROVIDER` / `LV_PUSH_PROVIDER` / `LV_STORAGE_PROVIDER` | `memory` | Channel vendors (G1.1). `memory` is the dev sink (warned on startup); a real provider needs its adapter wired. |
+| `LV_VENDOR_DATA_REGION` | — | Required when any real vendor is selected — where it stores data (DECISIONS.md 1.1). |
+| `LV_VENDOR_CROSS_BORDER_ACK` | — | Must be truthy to select a vendor storing data outside the launch jurisdiction (Bangladesh). Cross-border data flow is a deliberate, recorded choice. |
+| `LV_MAX_NOTE_BYTES` / `LV_MAX_PHOTO_BYTES` / `LV_MAX_PDF_BYTES` | 100 KB / 10 MB / 25 MB | Per-kind content size limits (G5/11.5). |
+| `LV_RECIPIENT_CODE_ATTEMPT_CAP` | `5` | Gated-page one-time-code attempt cap (F4.1); the code locks and a re-issue is required after this many failures. `off` disables the cap. |
+
+Real email / SMS / storage vendors and a managed KMS adapter are still to be
+written — those surfaces run on the in-memory dev adapters / local key, and the
+bootstrap warns so on startup. Each is a one-file adapter behind the existing
+port, selected by the variables above; wiring one does not touch the death path.

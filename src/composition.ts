@@ -11,7 +11,7 @@
 // here is hard-coded.
 
 import { randomBytes, randomInt, randomUUID } from 'node:crypto';
-import { EnvelopeCrypto, LocalKeyWrapper } from './adapters/crypto';
+import { EnvelopeCrypto, LocalKeyWrapper, type KeyWrapper } from './adapters/crypto';
 import { CredentialStore, SessionAuthenticator, AuthService } from './adapters/auth';
 import type { Channels, PublicPublisher } from './adapters/channels';
 import type { Secrets } from './adapters/secrets';
@@ -30,6 +30,7 @@ import {
 import { BillingService, FakeBillingGateway, SubscriptionRepository, type BillingGateway } from './billing';
 import { MemorialStore } from './memorial';
 import type { ContentPolicy } from './domain/payload';
+import type { RecipientAccessPolicy } from './delivery';
 import {
   AccountRepository,
   CaseFileRepository,
@@ -74,6 +75,18 @@ export interface AppConfig {
   readonly channels: Channels;
   readonly publisher: PublicPublisher;
   readonly contentPolicy: ContentPolicy;
+  /**
+   * KMS key wrapper for envelope encryption (G2/G2.1). When omitted, a local
+   * master-key wrapper is built from `secrets.kmsMasterKey` (dev/default). The
+   * deployment bootstrap selects the concrete provider so swapping KMS is a
+   * config change, never a code change (mirrors the state-backend selection).
+   */
+  readonly keyWrapper?: KeyWrapper;
+  /**
+   * Recipient-access throttle for the gated page (F4.1). When omitted, no
+   * attempt cap is enforced. The numeric cap is a deployment decision.
+   */
+  readonly recipientAccessPolicy?: RecipientAccessPolicy;
   readonly sessionTtlMs: number;
   readonly opsEmail: string;
   /** Base URL the recipient gated link is built on. */
@@ -117,7 +130,13 @@ export function buildServices(config: AppConfig): Services {
   const recipientOrders = new RecipientOrderRepository(config.state);
   const { auditFor, secrets, channels } = config;
 
-  const crypto = new EnvelopeCrypto(new LocalKeyWrapper({ keyId: 'kms-primary', masterKey: secrets.kmsMasterKey }));
+  // The KMS provider is a deployment choice (G2.1): the bootstrap supplies a
+  // concrete wrapper; absent one, fall back to a local master-key wrapper built
+  // from the injected key. Either way the stored envelope shape is identical, so
+  // the provider swaps with no data migration.
+  const keyWrapper =
+    config.keyWrapper ?? new LocalKeyWrapper({ keyId: 'kms-primary', masterKey: secrets.kmsMasterKey });
+  const crypto = new EnvelopeCrypto(keyWrapper);
 
   // Crypto-secure generators for the recipient release capability tokens. The
   // gated link + one-time code are the ONLY thing standing between an attacker
@@ -126,7 +145,17 @@ export function buildServices(config: AppConfig): Services {
   // link token; deployment adds the F4.1 attempt cap.
   const codeGenerator = (): string => String(randomInt(0, 1_000_000)).padStart(6, '0');
   const linkGenerator = (): string => `gl_${randomBytes(32).toString('base64url')}`;
-  const releaseArgs = { machines, contacts, payloads, plans, deliveries, auditFor, codeGenerator, linkGenerator };
+  const releaseArgs = {
+    machines,
+    contacts,
+    payloads,
+    plans,
+    deliveries,
+    auditFor,
+    codeGenerator,
+    linkGenerator,
+    ...(config.recipientAccessPolicy !== undefined ? { accessPolicy: config.recipientAccessPolicy } : {}),
+  };
   const credentialStore = new CredentialStore(config.credentials);
   const authenticator = new SessionAuthenticator({ secret: secrets.sessionSecret, now: config.now });
   const auth = new AuthService({ credentials: credentialStore, sessionSecret: secrets.sessionSecret, sessionTtlMs: config.sessionTtlMs, auditFor });
