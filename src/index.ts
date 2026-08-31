@@ -10,6 +10,8 @@ export * from './retention';
 export * from './persistence';
 export * from './runtime';
 export * from './app';
+export * from './billing';
+export * from './memorial';
 export * from './http';
 export * from './adapters';
 export * from './composition';

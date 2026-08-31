@@ -18,6 +18,8 @@ import type { RequestMetrics } from './metrics';
 const MAX_BODY_BYTES = 16 * 1024; // request bodies here are small (a token, a tiny JSON); cap to shed abuse.
 
 export type Route = (req: HttpRequest) => HttpResponse;
+/** A route that may answer asynchronously (e.g. a billing call to the provider). */
+export type AsyncRoute = (req: HttpRequest) => HttpResponse | Promise<HttpResponse>;
 
 export interface NodeServerOptions {
   /** Optional SLO metrics sink (F7). Receives path/method/status/duration only. */
@@ -52,8 +54,8 @@ function flattenHeaders(raw: http.IncomingHttpHeaders): Record<string, string> {
   return out;
 }
 
-/** Wrap a pure route in a Node server. Does not start it — call `.listen(...)`. */
-export function createNodeServer(route: Route, options: NodeServerOptions = {}): http.Server {
+/** Wrap a route (sync or async) in a Node server. Does not start it — call `.listen(...)`. */
+export function createNodeServer(route: AsyncRoute, options: NodeServerOptions = {}): http.Server {
   const metrics = options.metrics;
   return http.createServer((req, res) => {
     void (async () => {
@@ -86,7 +88,7 @@ export function createNodeServer(route: Route, options: NodeServerOptions = {}):
 
       let response: HttpResponse;
       try {
-        response = route(request);
+        response = await route(request);
       } catch {
         // A route should fail safe on its own; this is a last-resort guard so a
         // throwing route never crashes the process.
