@@ -1,5 +1,4 @@
-// Phase F — static HTML for the cancel surface (DECISIONS_PHASE_F_G.md F1;
-// UX_SPEC.md §2).
+// Phase F — the cancel surface (DECISIONS_PHASE_F_G.md F1; UX_SPEC.md §2).
 //
 // Every page here is a static, human-written template — a template cannot
 // hallucinate (CLAUDE.md), and this is the highest-SLO surface in the product,
@@ -8,6 +7,16 @@
 // only the opaque cancel token, whose sole power is to cancel (the safe
 // direction). Consistent with invariant 6's spirit that channels never leak
 // content.
+//
+// Visually these use the shared design system, but the cancel surface earns the
+// single largest, highest-contrast control in the whole product: the stop
+// button. One screen, one action, no competing calls to action, no confirmation
+// step that could fail a panicking user (UX §1.6 / §2).
+
+import { escapeHtml, page } from './design';
+
+// escapeHtml historically lived here; re-export keeps its import path stable.
+export { escapeHtml } from './design';
 
 /** Where a stuck user is sent when the automatic path fails — never a dead-end. */
 export interface CancelFallback {
@@ -17,29 +26,8 @@ export interface CancelFallback {
   readonly inAppCancelUrl?: string;
 }
 
-/** Minimal, dependency-free HTML-attribute/text escaping. */
-export function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-function doc(title: string, inner: string): string {
-  return [
-    '<!doctype html>',
-    '<html lang="en">',
-    '<head>',
-    '<meta charset="utf-8">',
-    '<meta name="viewport" content="width=device-width, initial-scale=1">',
-    '<meta name="robots" content="noindex,nofollow">',
-    `<title>${escapeHtml(title)}</title>`,
-    '</head>',
-    `<body>${inner}</body>`,
-    '</html>',
-  ].join('');
+function shell(title: string, inner: string): string {
+  return page({ surface: 'cancel', title, footer: false }, `<div class="wrap measure" style="padding-top:3.4rem;padding-bottom:3rem">${inner}</div>`);
 }
 
 /**
@@ -48,31 +36,33 @@ function doc(title: string, inner: string): string {
  * or scanner following the link can never fire a cancel (F1.1).
  */
 export function renderConfirmPage(token: string): string {
-  return doc(
+  return shell(
     'Stop everything',
     [
-      '<main>',
+      '<div class="eyebrow">Legacy Vault · Stop everything</div>',
       '<h1>Stop everything and reset</h1>',
-      '<p>This stops any pending process on your account and resets it. ',
-      'You don’t need to do anything else afterward.</p>',
-      '<form method="post" action="/cancel">',
+      '<p class="lede">This stops any pending process on your account and resets it. ',
+      'You don’t need to do anything else afterward, and you don’t need to sign in.</p>',
+      '<form class="panic-form" method="post" action="/cancel">',
       `<input type="hidden" name="t" value="${escapeHtml(token)}">`,
-      '<button type="submit">Stop everything and reset</button>',
+      '<button class="panic" type="submit">Stop everything and reset<span class="hint">One tap. Nothing has been released.</span></button>',
       '</form>',
-      '</main>',
+      '<p class="quiet" style="margin-top:1.6rem;font-size:.9rem">You can do this at any point — including the last second before anything would be sent. If you reached this page by mistake, you can simply close it; nothing changes until you tap the button.</p>',
     ].join(''),
   );
 }
 
 /** The success page (served after a POST cancel). Reassuring, final, no upsell. */
 export function renderSuccessPage(): string {
-  return doc(
+  return shell(
     'Done',
     [
-      '<main>',
+      '<div class="eyebrow">Legacy Vault</div>',
       '<h1>Done</h1>',
-      '<p>Everything is stopped. You don’t need to do anything else.</p>',
-      '</main>',
+      '<div class="panel panel--go" style="margin-top:1.2rem">',
+      '<p style="margin:0">Everything is stopped and your account is reset. You don’t need to do anything else. ',
+      'Anyone we had contacted will be told it was a false alarm.</p>',
+      '</div>',
     ].join(''),
   );
 }
@@ -97,15 +87,14 @@ export function renderFailSafePage(fallback: CancelFallback): string {
       `<li>Open the app and cancel from there: <a href="${escapeHtml(fallback.inAppCancelUrl)}">${escapeHtml(fallback.inAppCancelUrl)}</a></li>`,
     );
   }
-  return doc(
+  return shell(
     'We couldn’t process that link',
     [
-      '<main>',
+      '<div class="eyebrow">Legacy Vault</div>',
       '<h1>We couldn’t process that link automatically</h1>',
-      '<p>Your account has not been changed. You can still stop the process ',
+      '<p class="lede">Your account has not been changed. You can still stop the process ',
       'using either of these:</p>',
-      `<ul>${links.join('')}</ul>`,
-      '</main>',
+      `<div class="panel"><ul style="margin:0;padding-left:1.1rem">${links.join('')}</ul></div>`,
     ].join(''),
   );
 }

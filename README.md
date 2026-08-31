@@ -17,6 +17,11 @@ changing anything. The network-phase architecture decisions are in
 `DECISIONS_PHASE_F_G.md` (Phase F — Surfaces & API; Phase G — Integrations &
 security), including the closing security review (G6).
 
+**Public release:** the deployable layer on top of V1 — the server-rendered UI
+for all four audiences, the public-release memorial destination, production
+persistence (SQLite / Postgres), Stripe billing, and the legal layer — is
+documented in `LAUNCH.md`. Boot it with `npm run build && npm start`.
+
 ## Architecture at a glance
 
 Four tiers, and only the middle one mutates:
