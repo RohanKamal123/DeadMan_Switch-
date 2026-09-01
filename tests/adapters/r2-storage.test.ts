@@ -122,11 +122,25 @@ describe('R2StorageAdapter — StoragePort health probe (§6, veto path 3)', () 
 });
 
 describe('createR2StorageAdapter', () => {
-  it('fails with an actionable message when @aws-sdk/client-s3 is not installed', () => {
-    // The sandbox does not have the SDK installed — exactly the "not wired" case
-    // G1.1 requires: a clear, boot-time failure, never a silent fallback.
-    expect(() =>
-      createR2StorageAdapter({ accountId: 'a', accessKeyId: 'k', secretAccessKey: 's', bucket: 'b' }),
-    ).toThrow(/@aws-sdk\/client-s3 is not installed/);
+  it('builds a real, working adapter now that @aws-sdk/client-s3 is installed', () => {
+    // Construction alone makes no network call (the SDK just sets up config), so
+    // this proves the lazy-require + S3Client wiring is correct end to end.
+    const adapter = createR2StorageAdapter({ accountId: 'acct123', accessKeyId: 'key', secretAccessKey: 'secret', bucket: 'legacy-vault' });
+    expect(adapter).toBeInstanceOf(R2StorageAdapter);
+    expect(adapter.probe()).toBe(false); // no traffic yet — conservative default
+  });
+
+  it('fails with an actionable message when the SDK cannot be required (G1.1: never a silent fallback)', () => {
+    jest.resetModules();
+    jest.doMock('@aws-sdk/client-s3', () => {
+      throw new Error('Cannot find module');
+    });
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { createR2StorageAdapter: create } = require('../../src/adapters/channels/r2-storage') as typeof import('../../src/adapters/channels/r2-storage');
+    expect(() => create({ accountId: 'a', accessKeyId: 'k', secretAccessKey: 's', bucket: 'b' })).toThrow(
+      /@aws-sdk\/client-s3 is not installed/,
+    );
+    jest.dontMock('@aws-sdk/client-s3');
+    jest.resetModules();
   });
 });

@@ -119,10 +119,9 @@ const R2_ENV = {
 };
 
 describe('channelsFromEnv — R2 storage selection (G1.1/G2)', () => {
-  it('tries to build a real R2 adapter (fails on the missing SDK, not a silent fallback)', () => {
-    // The sandbox has no @aws-sdk/client-s3 installed — this proves the code path
-    // actually attempts to wire the real adapter rather than quietly using memory.
-    expect(() => channelsFromEnv(env(R2_ENV))).toThrow(/@aws-sdk\/client-s3 is not installed/);
+  it('builds a real, working R2 adapter for channels.storage', () => {
+    const channels = channelsFromEnv(env(R2_ENV));
+    expect(channels.storage.probe()).toBe(false); // conservative default, no traffic yet
   });
 
   it('validates R2 credentials before ever touching the SDK', () => {
@@ -141,8 +140,12 @@ describe('blobStoreFromEnv (G2/G1.1)', () => {
     expect(blobStoreFromEnv(env({}))).toBeUndefined();
   });
 
-  it('attempts to build the same R2 adapter as channelsFromEnv when selected', () => {
-    expect(() => blobStoreFromEnv(env(R2_ENV))).toThrow(/@aws-sdk\/client-s3 is not installed/);
+  it('builds a real BlobStore when r2 is selected (shape only — no real network call here)', () => {
+    const blobStore = blobStoreFromEnv(env(R2_ENV));
+    expect(blobStore).toBeDefined();
+    expect(typeof blobStore!.put).toBe('function');
+    expect(typeof blobStore!.get).toBe('function');
+    expect(typeof blobStore!.delete).toBe('function');
   });
 
   it('validates R2 credentials independently of channelsFromEnv', () => {
