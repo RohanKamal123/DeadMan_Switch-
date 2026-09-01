@@ -6,8 +6,8 @@
 // handler:
 //   - GET /release?a=&link=  → the code-entry form (reveals nothing; a bad/absent
 //     link shows a generic "not recognised" page, never a dead-end);
-//   - POST /release {a, link, code} → authenticate; on success the content is
-//     unlocked (rendering/decryption itself is Phase G2), on failure a retry page;
+//   - POST /release {a, link, code} → authenticate; on success the decrypted
+//     content renders inline (G2), on failure a retry page;
 //   - POST /release/resend {a, link} → re-issue a fresh code (72h, within the
 //     retention window).
 //
@@ -48,7 +48,7 @@ function field(req: HttpRequest, name: string): string | undefined {
   return req.query[name];
 }
 
-export function handleRecipient(req: HttpRequest, deps: RecipientHandlerDeps): HttpResponse {
+export async function handleRecipient(req: HttpRequest, deps: RecipientHandlerDeps): Promise<HttpResponse> {
   try {
     if (req.method === 'GET' && req.path === '/release') {
       const account = field(req, 'a');
@@ -66,11 +66,14 @@ export function handleRecipient(req: HttpRequest, deps: RecipientHandlerDeps): H
       if (!account || !link || !code) {
         return html(200, renderReleaseInvalidPage());
       }
-      const result = deps.release.authenticate(account, link, code, deps.now());
+      const result = await deps.release.authenticate(account, link, code, deps.now());
       if (!result.ok) {
         return html(200, renderReleaseErrorPage(result.reason, { account, link }));
       }
-      return html(200, renderUnlockedPage(result.payloadIds.length));
+      // This response carries real decrypted content (G2) — never let an
+      // intermediate proxy, CDN, or the browser's disk cache retain it.
+      const unlocked = html(200, renderUnlockedPage(result.items));
+      return { ...unlocked, headers: { ...unlocked.headers, 'cache-control': 'no-store' } };
     }
 
     if (req.method === 'POST' && req.path === '/release/resend') {

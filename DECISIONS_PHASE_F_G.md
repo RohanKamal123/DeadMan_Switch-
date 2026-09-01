@@ -199,7 +199,12 @@ gives them a transport.
   - The page renders content **server-side, streamed from decrypted
     storage per view**; nothing sensitive is placed in a URL, a query
     string, or client storage (consistent with invariant 6's spirit that
-    channels never leak content, UX §2/§4).
+    channels never leak content, UX §2/§4). **Built**: `ReleaseService`
+    decrypts via `EnvelopeCrypto` and returns real content on a successful
+    authenticate — resolving ciphertext from the KV store inline or, when
+    offloaded (G1.1's R2 adapter), from the configured `BlobStore`. Works
+    for every deployment, not only R2 ones (`crypto` is always wired in
+    `composition.ts`).
 - **F4.1 — OPEN:** the numeric attempt cap and re-issue throttle are
   deployment config (a `RecipientAccessPolicy`, mirroring how content size
   limits are handled, 11.5), never a threshold invented in the domain.
@@ -364,8 +369,11 @@ concrete per-environment choice, not the code seam.
 - **G1.1** — vendor selection + credentials. Resolved by
   `LV_{EMAIL,SMS,PUSH,STORAGE}_PROVIDER` (default `memory`), gated by the
   1.1 data-localization check (`LV_VENDOR_DATA_REGION` +
-  `LV_VENDOR_CROSS_BORDER_ACK`). Concrete real-vendor adapters are still to
-  be written — a one-file change behind each port.
+  `LV_VENDOR_CROSS_BORDER_ACK`). **Storage is wired**: `LV_STORAGE_PROVIDER=r2`
+  builds a real Cloudflare R2 adapter (`src/adapters/channels/r2-storage.ts`,
+  the AWS S3 SDK — R2 is S3-compatible — lazy-required like the sqlite/postgres
+  bindings). Email/SMS/push adapters are still to be written — a one-file
+  change behind each port, same shape.
 - **G2.1** — KMS provider + master-key rotation cadence. Resolved by
   `LV_KMS_PROVIDER` (default `local`) + `LV_KMS_KEY_ID` (rotation is a new
   id + key, envelope re-wrap only). A managed-KMS adapter is still to be

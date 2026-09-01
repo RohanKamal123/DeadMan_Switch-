@@ -15,7 +15,7 @@ import {
   InMemorySmsAdapter,
   InMemoryStorageAdapter,
 } from '../../src/adapters';
-import { createWorker, startWorker, type AppConfig } from '../../src/composition';
+import { createWorker, startWorker, startBlobHealthRefresh, type AppConfig } from '../../src/composition';
 import { Scheduler, type AuditSinkFactory } from '../../src/runtime';
 import { VERIFYING_THRESHOLD_DAYS, DAY_MS } from '../../src/domain/config';
 
@@ -102,5 +102,35 @@ describe('startWorker (interval loop)', () => {
       handle.stop();
       handle.stop();
     }).not.toThrow();
+  });
+});
+
+describe('startBlobHealthRefresh (network-backed storage health, e.g. R2)', () => {
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
+  it('is a no-op for a storage adapter with no refreshProbe (e.g. the in-memory dev adapter)', () => {
+    const state = new InMemoryKeyValueStore();
+    const handle = startBlobHealthRefresh(configWith(state, () => 0), 1000);
+    expect(handle).toBeUndefined();
+  });
+
+  it('actively refreshes a network-backed adapter on the given cadence, immediately and on interval', () => {
+    const state = new InMemoryKeyValueStore();
+    let calls = 0;
+    const refreshable = { refreshProbe: async () => { calls += 1; return true; } };
+    const config = configWith(state, () => 0);
+    const withNetworkStorage: AppConfig = { ...config, channels: { ...config.channels, storage: refreshable as never } };
+
+    const handle = startBlobHealthRefresh(withNetworkStorage, 1000);
+    expect(handle).toBeDefined();
+    expect(calls).toBe(1); // immediate
+
+    jest.advanceTimersByTime(3000);
+    expect(calls).toBe(4);
+
+    handle!.stop();
+    jest.advanceTimersByTime(5000);
+    expect(calls).toBe(4); // stopped
   });
 });

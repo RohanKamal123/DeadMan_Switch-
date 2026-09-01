@@ -68,7 +68,7 @@ export interface SiteDeps {
   readonly secureCookies: boolean;
   readonly newContactId: () => string;
   /** The next JSON API route to try when no HTML surface matches. */
-  readonly apiFallback: (req: HttpRequest) => HttpResponse;
+  readonly apiFallback: (req: HttpRequest) => HttpResponse | Promise<HttpResponse>;
 }
 
 function form(req: HttpRequest): URLSearchParams {

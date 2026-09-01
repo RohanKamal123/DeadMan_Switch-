@@ -12,6 +12,7 @@
 // arranged this, and a calm way in.
 
 import { escapeHtml, page } from './design';
+import type { ReleasedItem } from '../app';
 
 function shell(title: string, inner: string): string {
   return page(
@@ -56,15 +57,35 @@ export function renderCodeEntryPage(account: string, link: string, notice?: stri
   );
 }
 
-/** After a successful unlock. Content rendering/decryption itself is Phase G2. */
-export function renderUnlockedPage(itemCount: number): string {
+/** One decrypted item, rendered inline (note) or as a download (photo/pdf). Never a raw fetch — the bytes are already here. */
+function renderItem(item: ReleasedItem): string {
+  if (item.kind === 'note') {
+    return `<div class="panel" style="margin-top:1rem"><p style="margin:0;white-space:pre-wrap">${escapeHtml(item.content.toString('utf8'))}</p></div>`;
+  }
+  // Base64 has no HTML metacharacters; mimeType is still escaped defensively
+  // since it lands in a quoted attribute.
+  const dataUri = `data:${escapeHtml(item.mimeType)};base64,${item.content.toString('base64')}`;
+  if (item.kind === 'photo') {
+    return `<div class="panel" style="margin-top:1rem;padding:0;overflow:hidden"><img src="${dataUri}" alt="" style="display:block;max-width:100%;height:auto"></div>`;
+  }
+  return `<div class="panel" style="margin-top:1rem"><a class="act act--go" download="document.pdf" href="${dataUri}">Download the PDF</a></div>`;
+}
+
+/** After a successful unlock: the decrypted content itself, server-rendered per view (G2). */
+export function renderUnlockedPage(items: readonly ReleasedItem[]): string {
+  const itemCount = items.length;
   const noun = itemCount === 1 ? 'message' : 'messages';
+  const heading = itemCount === 0 ? 'Access unlocked' : `Your ${noun} ${itemCount === 1 ? 'is' : 'are'} ready`;
+  const body =
+    itemCount === 0
+      ? '<div class="panel"><p style="margin:0">Nothing could be opened right now. Please contact support and we’ll help.</p></div>'
+      : items.map(renderItem).join('');
   return shell(
     'Message unlocked',
     [
       '<div class="eyebrow">Unlocked</div>',
-      '<h1>Your ' + noun + ' ' + (itemCount === 1 ? 'is' : 'are') + ' ready</h1>',
-      `<div class="panel panel--go"><p style="margin:0">You have <span class="num">${itemCount}</span> ${noun} waiting. They will open below.</p></div>`,
+      `<h1>${heading}</h1>`,
+      body,
       '<p class="quiet" style="margin-top:1.4rem;font-size:.88rem">You can return to this page with your link and code while access remains open.</p>',
     ].join(''),
   );

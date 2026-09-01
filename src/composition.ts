@@ -17,6 +17,7 @@ import {
   ChannelAlertSender,
   ChannelReminderSender,
   dependencyProbers,
+  type BlobStore,
   type Channels,
   type PublicPublisher,
 } from './adapters/channels';
@@ -64,7 +65,7 @@ import {
   type HttpRequest,
   type HttpResponse,
   type RequestMetrics,
-  type Route,
+  type AsyncRoute,
 } from './http';
 import * as http from 'node:http';
 
@@ -93,6 +94,13 @@ export interface AppConfig {
    * attempt cap is enforced. The numeric cap is a deployment decision.
    */
   readonly recipientAccessPolicy?: RecipientAccessPolicy;
+  /**
+   * Blob offload for real content ciphertext (G2/G1.1) — e.g. R2. When
+   * omitted, ciphertext stays inline in the KV state store (dev/default); the
+   * deployment bootstrap selects the concrete provider so swapping it is a
+   * config change (mirrors the KMS/state-backend selection).
+   */
+  readonly blobStore?: BlobStore;
   readonly sessionTtlMs: number;
   readonly opsEmail: string;
   /** Base URL the recipient gated link is built on. */
@@ -160,7 +168,11 @@ export function buildServices(config: AppConfig): Services {
     auditFor,
     codeGenerator,
     linkGenerator,
+    // Decrypt-and-serve (G2) always has crypto available here; the blob store
+    // (G1.1, e.g. R2) is the deployment's choice, absent by default.
+    crypto,
     ...(config.recipientAccessPolicy !== undefined ? { accessPolicy: config.recipientAccessPolicy } : {}),
+    ...(config.blobStore !== undefined ? { blobStore: config.blobStore } : {}),
   };
   const credentialStore = new CredentialStore(config.credentials);
   const authenticator = new SessionAuthenticator({ secret: secrets.sessionSecret, now: config.now });
@@ -178,7 +190,13 @@ export function buildServices(config: AppConfig): Services {
     operators: new OperatorService({ machines, contacts, caseFiles, auditFor }),
     release: new ReleaseService(releaseArgs),
     people: new PeopleService({ contacts, machines, recipientOrders }),
-    authoring: new AuthoringService({ payloads, contacts, machines, policy: config.contentPolicy }),
+    authoring: new AuthoringService({
+      payloads,
+      contacts,
+      machines,
+      policy: config.contentPolicy,
+      ...(config.blobStore !== undefined ? { blobStore: config.blobStore } : {}),
+    }),
     admin: new AdminService({ machines, auditFor, release: new ReleaseService(releaseArgs) }),
     drill: new DrillService({ contacts, email: channels.email, sms: channels.sms, auditFor }),
     publicRelease: new PublicReleaseService({ machines, publisher: config.publisher, auditFor }),
@@ -192,9 +210,9 @@ export function buildServices(config: AppConfig): Services {
 }
 
 /** The main API route: dispatch a request to the handler for its audience. */
-export function apiRoute(services: Services, now: () => number): Route {
+export function apiRoute(services: Services, now: () => number): AsyncRoute {
   const { authenticator } = services;
-  return (req: HttpRequest): HttpResponse => {
+  return (req: HttpRequest): HttpResponse | Promise<HttpResponse> => {
     const path = req.path;
     if (path === '/auth/login') return handleLogin(req, { auth: services.auth, now });
     if (path === '/billing/webhook') {
@@ -312,6 +330,47 @@ export function startWorker(scheduler: Scheduler, options: StartWorkerOptions): 
   const timer = setInterval(runOnce, options.intervalMs);
   // Do not keep the process alive on the worker alone; the servers own the
   // lifetime, and a test that forgets to stop() must not hang.
+  if (typeof timer.unref === 'function') timer.unref();
+  let stopped = false;
+  return {
+    stop(): void {
+      if (stopped) return;
+      stopped = true;
+      clearInterval(timer);
+    },
+  };
+}
+
+/** A storage adapter whose health can only be checked asynchronously (e.g. R2 — see r2-storage.ts). */
+interface RefreshableProbe {
+  refreshProbe(): Promise<boolean>;
+}
+
+function hasRefreshProbe(x: unknown): x is RefreshableProbe {
+  return typeof x === 'object' && x !== null && typeof (x as { refreshProbe?: unknown }).refreshProbe === 'function';
+}
+
+/**
+ * Actively refresh a network-backed storage adapter's cached health (e.g. R2's
+ * `probe()` — see r2-storage.ts's file header: it defaults to unhealthy and is
+ * otherwise only updated by real content traffic). Without this, a quiet
+ * deployment with no content activity would have its storage probe stuck
+ * reporting unhealthy forever, blocking entry to VERIFYING indefinitely (safe,
+ * per veto path 3, but not the intended behavior). A no-op when the configured
+ * storage adapter has no `refreshProbe` (the in-memory dev adapter, most other
+ * future adapters that CAN answer synchronously).
+ */
+export function startBlobHealthRefresh(config: AppConfig, intervalMs: number): WorkerHandle | undefined {
+  const candidate = config.channels.storage;
+  if (!hasRefreshProbe(candidate)) return undefined;
+  const runOnce = (): void => {
+    candidate.refreshProbe().catch(() => {
+      // refreshProbe already fails safe internally (never throws); this catch
+      // exists only to satisfy the no-floating-promise rule.
+    });
+  };
+  runOnce();
+  const timer = setInterval(runOnce, intervalMs);
   if (typeof timer.unref === 'function') timer.unref();
   let stopped = false;
   return {

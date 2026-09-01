@@ -11,6 +11,7 @@ import {
   recipientAccessPolicyFromEnv,
   keyWrapperFromEnv,
   channelsFromEnv,
+  blobStoreFromEnv,
 } from '../../src/config/bootstrap';
 import { cancelSecretsFromEnv, secretsFromEnv, MissingSecretError, type Secrets } from '../../src/adapters/secrets';
 
@@ -104,6 +105,49 @@ describe('channelsFromEnv (G1.1 + 1.1 data-localization gate)', () => {
     expect(() =>
       channelsFromEnv(env({ LV_EMAIL_PROVIDER: 'ses', LV_VENDOR_DATA_REGION: 'us' })),
     ).toThrow(/cross-border|LV_VENDOR_CROSS_BORDER_ACK/);
+  });
+});
+
+const R2_ENV = {
+  LV_STORAGE_PROVIDER: 'r2',
+  LV_VENDOR_DATA_REGION: 'us', // R2 has no Bangladesh region — cross-border by nature
+  LV_VENDOR_CROSS_BORDER_ACK: '1',
+  LV_R2_ACCOUNT_ID: 'acct123',
+  LV_R2_ACCESS_KEY_ID: 'key123',
+  LV_R2_SECRET_ACCESS_KEY: 'secret123',
+  LV_R2_BUCKET: 'legacy-vault-content',
+};
+
+describe('channelsFromEnv — R2 storage selection (G1.1/G2)', () => {
+  it('tries to build a real R2 adapter (fails on the missing SDK, not a silent fallback)', () => {
+    // The sandbox has no @aws-sdk/client-s3 installed — this proves the code path
+    // actually attempts to wire the real adapter rather than quietly using memory.
+    expect(() => channelsFromEnv(env(R2_ENV))).toThrow(/@aws-sdk\/client-s3 is not installed/);
+  });
+
+  it('validates R2 credentials before ever touching the SDK', () => {
+    const { LV_R2_BUCKET: _drop, ...missingBucket } = R2_ENV;
+    expect(() => channelsFromEnv(env(missingBucket))).toThrow(/LV_R2_BUCKET/);
+  });
+
+  it('still runs the 1.1 data-localization gate for r2 like any other real vendor', () => {
+    const { LV_VENDOR_DATA_REGION: _drop, ...noRegion } = R2_ENV;
+    expect(() => channelsFromEnv(env(noRegion))).toThrow(/LV_VENDOR_DATA_REGION/);
+  });
+});
+
+describe('blobStoreFromEnv (G2/G1.1)', () => {
+  it('is undefined by default — ciphertext stays inline in the KV store', () => {
+    expect(blobStoreFromEnv(env({}))).toBeUndefined();
+  });
+
+  it('attempts to build the same R2 adapter as channelsFromEnv when selected', () => {
+    expect(() => blobStoreFromEnv(env(R2_ENV))).toThrow(/@aws-sdk\/client-s3 is not installed/);
+  });
+
+  it('validates R2 credentials independently of channelsFromEnv', () => {
+    const { LV_R2_ACCESS_KEY_ID: _drop, ...missingKey } = R2_ENV;
+    expect(() => blobStoreFromEnv(env(missingKey))).toThrow(/LV_R2_ACCESS_KEY_ID/);
   });
 });
 

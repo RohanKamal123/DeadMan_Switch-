@@ -102,21 +102,21 @@ describe('ReleaseService', () => {
     expect(h.deliveries.get('a')).toBeDefined();
   });
 
-  it('the gated page authenticates the link + code and returns the addressed items', () => {
+  it('the gated page authenticates the link + code and returns the addressed items', async () => {
     const h = harness();
     const begun = h.service.begin('a', ['r1', 'r2'], RELEASED_AT);
     if (!begun.ok) throw new Error('begin failed');
     const at = RELEASED_AT + HOUR_MS;
-    const res = h.service.authenticate('a', linkOf(begun.messages), codeOf(begun.messages), at);
+    const res = await h.service.authenticate('a', linkOf(begun.messages), codeOf(begun.messages), at);
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.payloadIds).toEqual(['p1']);
   });
 
-  it('logs the access as metadata only, on the durable trail (invariant 6/7)', () => {
+  it('logs the access as metadata only, on the durable trail (invariant 6/7)', async () => {
     const h = harness();
     const begun = h.service.begin('a', ['r1'], RELEASED_AT);
     if (!begun.ok) throw new Error('begin failed');
-    h.service.authenticate('a', linkOf(begun.messages), codeOf(begun.messages), RELEASED_AT + HOUR_MS);
+    await h.service.authenticate('a', linkOf(begun.messages), codeOf(begun.messages), RELEASED_AT + HOUR_MS);
     const store = h.storeFor('a');
     expect(store.verify().ok).toBe(true);
     const events = store.all().map((e) => e.event);
@@ -124,17 +124,17 @@ describe('ReleaseService', () => {
     expect(events).toContain('RELEASE_ACCESS');
   });
 
-  it('rejects a wrong code and an expired code', () => {
+  it('rejects a wrong code and an expired code', async () => {
     const h = harness();
     const begun = h.service.begin('a', ['r1'], RELEASED_AT);
     if (!begun.ok) throw new Error('begin failed');
     const link = linkOf(begun.messages);
-    expect(h.service.authenticate('a', link, '000000', RELEASED_AT + HOUR_MS).ok).toBe(false);
+    expect((await h.service.authenticate('a', link, '000000', RELEASED_AT + HOUR_MS)).ok).toBe(false);
     const afterExpiry = RELEASED_AT + (CODE_EXPIRY_HOURS + 1) * HOUR_MS;
-    expect(h.service.authenticate('a', link, codeOf(begun.messages), afterExpiry).ok).toBe(false);
+    expect((await h.service.authenticate('a', link, codeOf(begun.messages), afterExpiry)).ok).toBe(false);
   });
 
-  it('re-issues a fresh code by link; the new code works, the old one does not', () => {
+  it('re-issues a fresh code by link; the new code works, the old one does not', async () => {
     const h = harness();
     const begun = h.service.begin('a', ['r1'], RELEASED_AT);
     if (!begun.ok) throw new Error('begin failed');
@@ -147,8 +147,8 @@ describe('ReleaseService', () => {
     const newCode = reissued.sms.code;
 
     const at = RELEASED_AT + 2 * HOUR_MS;
-    expect(h.service.authenticate('a', link, oldCode, at).ok).toBe(false);
-    expect(h.service.authenticate('a', link, newCode, at).ok).toBe(true);
+    expect((await h.service.authenticate('a', link, oldCode, at)).ok).toBe(false);
+    expect((await h.service.authenticate('a', link, newCode, at)).ok).toBe(true);
   });
 
   it('falls back to the next recipient after 14 days of silence (11.4)', () => {
@@ -165,14 +165,14 @@ describe('ReleaseService', () => {
     expect(h.service.begin('a', ['r1'], RELEASED_AT).ok).toBe(false);
   });
 
-  it('denies gated access once the account leaves a release state (e.g. a later cancel)', () => {
+  it('denies gated access once the account leaves a release state (e.g. a later cancel)', async () => {
     const h = harness();
     const begun = h.service.begin('a', ['r1'], RELEASED_AT);
     if (!begun.ok) throw new Error('begin failed');
     const link = linkOf(begun.messages);
     const code = codeOf(begun.messages);
     h.setState('CANCELLED');
-    const res = h.service.authenticate('a', link, code, RELEASED_AT + HOUR_MS);
+    const res = await h.service.authenticate('a', link, code, RELEASED_AT + HOUR_MS);
     expect(res.ok).toBe(false);
   });
 });

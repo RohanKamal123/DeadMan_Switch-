@@ -28,7 +28,10 @@ import {
   InMemorySmsAdapter,
   InMemoryPushAdapter,
   InMemoryStorageAdapter,
+  createR2StorageAdapter,
+  type BlobStore,
   type Channels,
+  type StoragePort,
 } from '../adapters/channels';
 import { LocalKeyWrapper, type KeyWrapper } from '../adapters/crypto';
 import { MemorialPublisher } from '../adapters/channels/memorial-publisher';
@@ -173,12 +176,43 @@ function assertVendorDataLocalization(namedProviders: readonly string[], e: Node
   }
 }
 
+/** Storage providers with a real, wired adapter. Everything else in `channelsFromEnv` still fails the boot. */
+const WIRED_STORAGE_PROVIDERS = new Set(['memory', 'r2']);
+
+/** Reads and validates the R2 credential env vars. Throws with exactly what's missing. */
+function r2OptionsFromEnv(e: NodeJS.ProcessEnv): { accountId: string; accessKeyId: string; secretAccessKey: string; bucket: string; endpoint?: string } {
+  const required: Record<string, string> = {
+    LV_R2_ACCOUNT_ID: e['LV_R2_ACCOUNT_ID'] ?? '',
+    LV_R2_ACCESS_KEY_ID: e['LV_R2_ACCESS_KEY_ID'] ?? '',
+    LV_R2_SECRET_ACCESS_KEY: e['LV_R2_SECRET_ACCESS_KEY'] ?? '',
+    LV_R2_BUCKET: e['LV_R2_BUCKET'] ?? '',
+  };
+  const missing = Object.entries(required).filter(([, v]) => v === '').map(([k]) => k);
+  if (missing.length > 0) {
+    throw new Error(`LV_STORAGE_PROVIDER=r2 requires ${missing.join(', ')} (Cloudflare R2 credentials — see LAUNCH.md).`);
+  }
+  const endpoint = e['LV_R2_ENDPOINT'];
+  return {
+    accountId: required['LV_R2_ACCOUNT_ID']!,
+    accessKeyId: required['LV_R2_ACCESS_KEY_ID']!,
+    secretAccessKey: required['LV_R2_SECRET_ACCESS_KEY']!,
+    bucket: required['LV_R2_BUCKET']!,
+    ...(endpoint !== undefined && endpoint !== '' ? { endpoint } : {}),
+  };
+}
+
 /**
  * Select the channel vendors (G1.1). Every channel defaults to the in-memory
  * stand-in (dev). A named real provider is refused until its adapter is wired —
  * the adapter is a one-file change behind the existing port — so no death-path
  * message ever goes silently to the in-memory sink while the operator believes a
  * real vendor is live. Selecting any real vendor also runs the 1.1 gate.
+ *
+ * Storage is the one channel with a real adapter today: `LV_STORAGE_PROVIDER=r2`
+ * builds a Cloudflare R2 adapter (`src/adapters/channels/r2-storage.ts`) for the
+ * weekly health probe. `blobStoreFromEnv` below builds the SAME kind of adapter
+ * for real content ciphertext (G2) — kept as a separate instance so this function
+ *'s signature and every existing caller stay unchanged.
  */
 export function channelsFromEnv(e: NodeJS.ProcessEnv = process.env): Channels {
   const providers = {
@@ -190,20 +224,36 @@ export function channelsFromEnv(e: NodeJS.ProcessEnv = process.env): Channels {
   const named = Object.values(providers).filter((p) => p !== 'memory');
   assertVendorDataLocalization(named, e);
   for (const [kind, provider] of Object.entries(providers)) {
-    if (provider !== 'memory') {
-      throw new Error(
-        `${kind} provider "${provider}" is selected but no vendor adapter is wired (G1.1). ` +
-          `Implement it behind the ${kind} port in src/adapters/channels/ and select it here; ` +
-          `until then the boot fails rather than route ${kind} to the in-memory dev sink.`,
-      );
-    }
+    if (kind === 'storage' ? WIRED_STORAGE_PROVIDERS.has(provider) : provider === 'memory') continue;
+    throw new Error(
+      `${kind} provider "${provider}" is selected but no vendor adapter is wired (G1.1). ` +
+        `Implement it behind the ${kind} port in src/adapters/channels/ and select it here; ` +
+        `until then the boot fails rather than route ${kind} to the in-memory dev sink.`,
+    );
   }
+  const storage: StoragePort = providers.storage === 'r2' ? createR2StorageAdapter(r2OptionsFromEnv(e)) : new InMemoryStorageAdapter();
   return {
     email: new InMemoryEmailAdapter(),
     sms: new InMemorySmsAdapter(),
     push: new InMemoryPushAdapter(),
-    storage: new InMemoryStorageAdapter(),
+    storage,
   };
+}
+
+/**
+ * Blob offload for real content ciphertext (G2/G1.1) — the same
+ * `LV_STORAGE_PROVIDER` selection as `channelsFromEnv`, but returning the async
+ * `BlobStore` half for `AuthoringService`/`ReleaseService`. `undefined` when the
+ * provider is `memory` (default): ciphertext stays inline in the KV store,
+ * unchanged from before this existed.
+ */
+export function blobStoreFromEnv(e: NodeJS.ProcessEnv = process.env): BlobStore | undefined {
+  const provider = (e['LV_STORAGE_PROVIDER'] ?? 'memory').toLowerCase();
+  if (provider === 'memory') return undefined;
+  if (provider === 'r2') return createR2StorageAdapter(r2OptionsFromEnv(e));
+  // Any other value already failed inside channelsFromEnv; unreachable when
+  // configFromEnv calls both, but never silently return "no offload" here either.
+  throw new Error(`storage provider "${provider}" is selected but no vendor adapter is wired (G1.1).`);
 }
 
 function billingGateway(): BillingGateway {
@@ -244,6 +294,10 @@ export async function configFromEnv(): Promise<AppConfig> {
       console.warn(`[bootstrap] ${kind} channel is the in-memory dev sink — no real ${kind.toLowerCase()} is sent (G1.1).`);
     }
   }
+  if ((env('LV_STORAGE_PROVIDER', 'memory')).toLowerCase() === 'r2') {
+    // eslint-disable-next-line no-console
+    console.log('[bootstrap] Storage provider: Cloudflare R2 — real content ciphertext is offloaded (G2/G1.1).');
+  }
   if ((env('LV_KMS_PROVIDER', 'local')).toLowerCase() === 'local') {
     // eslint-disable-next-line no-console
     console.warn('[bootstrap] KMS provider is the local master-key wrapper. Set LV_KMS_PROVIDER for a managed KMS (G2.1).');
@@ -260,6 +314,7 @@ export async function configFromEnv(): Promise<AppConfig> {
     contentPolicy: contentPolicyFromEnv(),
     keyWrapper: keyWrapperFromEnv(secrets),
     recipientAccessPolicy: recipientAccessPolicyFromEnv(),
+    blobStore: blobStoreFromEnv(),
     sessionTtlMs: Number(env('LV_SESSION_TTL_MS', String(1000 * 60 * 60 * 24 * 14))),
     opsEmail: env('LV_OPS_EMAIL', 'ops@legacyvault.example'),
     gatedBaseUrl: `${env('LV_BASE_URL', 'http://localhost:8080')}/release`,

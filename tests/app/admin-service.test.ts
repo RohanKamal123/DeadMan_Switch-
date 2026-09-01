@@ -84,7 +84,7 @@ describe('AdminService', () => {
     expect(machine.state).toBe('NUDGE');
   });
 
-  it('revokes a recipient’s release access, denying further authentication', () => {
+  it('revokes a recipient’s release access, denying further authentication', async () => {
     const h = harness();
     h.machines.save('a', Machine.restore(machineIn('PRIVATE_RELEASE')));
     h.contacts.save('a', recipient('r1'));
@@ -96,7 +96,7 @@ describe('AdminService', () => {
     if (email?.channel !== 'email' || sms?.channel !== 'sms') throw new Error('missing messages');
 
     expect(h.admin.revoke('a', 'r1', ADMIN, RELEASED_AT + 1).ok).toBe(true);
-    const res = h.release.authenticate('a', email.gatedLink, sms.code, RELEASED_AT + 2);
+    const res = await h.release.authenticate('a', email.gatedLink, sms.code, RELEASED_AT + 2);
     expect(res.ok).toBe(false);
   });
 

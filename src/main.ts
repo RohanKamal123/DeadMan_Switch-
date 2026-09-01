@@ -14,7 +14,7 @@
 
 import { configFromEnv, serverRole } from './config/bootstrap';
 import { createCancelOnlyServer } from './config/cancel-bootstrap';
-import { createServers, createWorker, startWorker } from './composition';
+import { createServers, createWorker, startWorker, startBlobHealthRefresh } from './composition';
 
 function log(message: string): void {
   // eslint-disable-next-line no-console
@@ -68,6 +68,14 @@ async function main(): Promise<void> {
       },
     });
     log(`[legacy-vault] worker started (tick every ${intervalMs}ms)`);
+
+    // A network-backed storage adapter (e.g. R2) can't answer its health probe
+    // synchronously — refresh its cache on the same cadence so it doesn't sit
+    // reporting unhealthy forever on a quiet deployment (see r2-storage.ts).
+    // No-op for the in-memory dev adapter.
+    if (startBlobHealthRefresh(config, intervalMs) !== undefined) {
+      log('[legacy-vault] storage health probe refresh started (network-backed adapter detected)');
+    }
   } else {
     log('[legacy-vault] worker NOT started here (LV_RUN_WORKER=0) — run it in exactly one process.');
   }

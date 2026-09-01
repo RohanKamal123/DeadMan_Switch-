@@ -154,13 +154,51 @@ running on the in-memory adapter or the local key.
 |---|---|---|
 | `LV_KMS_PROVIDER` | `local` | KMS wrapper for envelope encryption (G2/G2.1). `local` uses `LV_KMS_MASTER_KEY`; a named managed KMS needs its adapter wired or the boot fails. |
 | `LV_KMS_KEY_ID` | `kms-primary` | Wrapping-key id stored in the envelope; rotation is a new id + key, no content re-encryption. |
-| `LV_EMAIL_PROVIDER` / `LV_SMS_PROVIDER` / `LV_PUSH_PROVIDER` / `LV_STORAGE_PROVIDER` | `memory` | Channel vendors (G1.1). `memory` is the dev sink (warned on startup); a real provider needs its adapter wired. |
+| `LV_EMAIL_PROVIDER` / `LV_SMS_PROVIDER` / `LV_PUSH_PROVIDER` | `memory` | Channel vendors (G1.1). `memory` is the dev sink (warned on startup); a real provider needs its adapter wired. |
+| `LV_STORAGE_PROVIDER` | `memory` | `memory` is the dev sink; `r2` wires real **Cloudflare R2** content storage — see below. |
 | `LV_VENDOR_DATA_REGION` | — | Required when any real vendor is selected — where it stores data (DECISIONS.md 1.1). |
-| `LV_VENDOR_CROSS_BORDER_ACK` | — | Must be truthy to select a vendor storing data outside the launch jurisdiction (Bangladesh). Cross-border data flow is a deliberate, recorded choice. |
+| `LV_VENDOR_CROSS_BORDER_ACK` | — | Must be truthy to select a vendor storing data outside the launch jurisdiction (Bangladesh). Cross-border data flow is a deliberate, recorded choice — R2 has no Bangladesh region, so selecting it needs this. |
 | `LV_MAX_NOTE_BYTES` / `LV_MAX_PHOTO_BYTES` / `LV_MAX_PDF_BYTES` | 100 KB / 10 MB / 25 MB | Per-kind content size limits (G5/11.5). |
 | `LV_RECIPIENT_CODE_ATTEMPT_CAP` | `5` | Gated-page one-time-code attempt cap (F4.1); the code locks and a re-issue is required after this many failures. `off` disables the cap. |
 
-Real email / SMS / storage vendors and a managed KMS adapter are still to be
-written — those surfaces run on the in-memory dev adapters / local key, and the
-bootstrap warns so on startup. Each is a one-file adapter behind the existing
-port, selected by the variables above; wiring one does not touch the death path.
+Real email / SMS vendors and a managed KMS adapter are still to be written —
+those surfaces run on the in-memory dev adapters / local key, and the bootstrap
+warns so on startup. Each is a one-file adapter behind the existing port,
+selected by the variables above; wiring one does not touch the death path.
+Storage (R2) is wired — see below.
+
+## Content storage: Cloudflare R2, and decrypt-and-serve (G2)
+
+```
+LV_STORAGE_PROVIDER=r2
+LV_R2_ACCOUNT_ID=...        LV_R2_ACCESS_KEY_ID=...
+LV_R2_SECRET_ACCESS_KEY=... LV_R2_BUCKET=...
+LV_VENDOR_DATA_REGION=us    LV_VENDOR_CROSS_BORDER_ACK=1   # R2 has no BD region
+npm install @aws-sdk/client-s3   # R2 speaks the S3 API; lazy-required, install to use it
+```
+
+Real content ciphertext (a photo/PDF up to the configured size limit) is
+offloaded out of the KV state store into R2, keyed by `accountId/payloadId`.
+The KV store keeps only metadata (kind, mime type, key id, IV, addressing,
+timestamps) plus a sentinel marking the record as blob-backed — the stored
+envelope shape a reader sees is unchanged either way. `AuthoringService` writes
+through on save (fire-and-forget on an internal durable queue, the same model
+already used for the Postgres backend; `authoring.flush()` awaits it); an edit
+that only changes metadata (e.g. re-addressing recipients) never re-touches the
+blob, so it can't silently overwrite real content with a stale write.
+
+The recipient gated page (`/release`) now genuinely decrypts and serves content
+per view — this was the Phase-G2 gap the F4 design always called for
+("content rendered server-side, streamed from decrypted storage per view") and
+is now built for **every** deployment, not just R2 ones: `ReleaseService`
+resolves ciphertext (from R2 when offloaded, inline otherwise), decrypts with
+the configured KMS key, and returns it to the one response that unlocks it — a
+note renders as plain text, a photo/PDF is embedded as a `download` link. Never
+written to a URL, a cookie, or client storage; a payload that fails to decrypt
+is skipped, not thrown, so one bad item never breaks the whole unlock.
+
+Storage's weekly health probe (§6, veto path 3) can't make a real network call
+synchronously, so `R2StorageAdapter.probe()` reads a **cached** last-known-good
+result — refreshed by real read/write traffic, and defaulting to **unhealthy**
+before any traffic exists. Unknown health blocking entry to VERIFYING is the
+conservative direction the whole product is built around.
