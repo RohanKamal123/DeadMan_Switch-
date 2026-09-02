@@ -154,18 +154,78 @@ running on the in-memory adapter or the local key.
 |---|---|---|
 | `LV_KMS_PROVIDER` | `local` | KMS wrapper for envelope encryption (G2/G2.1). `local` uses `LV_KMS_MASTER_KEY`; a named managed KMS needs its adapter wired or the boot fails. |
 | `LV_KMS_KEY_ID` | `kms-primary` | Wrapping-key id stored in the envelope; rotation is a new id + key, no content re-encryption. |
-| `LV_EMAIL_PROVIDER` / `LV_SMS_PROVIDER` / `LV_PUSH_PROVIDER` | `memory` | Channel vendors (G1.1). `memory` is the dev sink (warned on startup); a real provider needs its adapter wired. |
+| `LV_EMAIL_PROVIDER` | `memory` | `memory` is the dev sink; `resend` wires real **Resend** email — see below. |
+| `LV_SMS_PROVIDER` | `memory` | `memory` is the dev sink; `twilio` wires real **Twilio** SMS — see below. |
+| `LV_PUSH_PROVIDER` | `memory` | No real adapter yet — any non-`memory` value fails the boot (G1.1). |
 | `LV_STORAGE_PROVIDER` | `memory` | `memory` is the dev sink; `r2` wires real **Cloudflare R2** content storage — see below. |
 | `LV_VENDOR_DATA_REGION` | — | Required when any real vendor is selected — where it stores data (DECISIONS.md 1.1). |
-| `LV_VENDOR_CROSS_BORDER_ACK` | — | Must be truthy to select a vendor storing data outside the launch jurisdiction (Bangladesh). Cross-border data flow is a deliberate, recorded choice — R2 has no Bangladesh region, so selecting it needs this. |
+| `LV_VENDOR_CROSS_BORDER_ACK` | — | Must be truthy to select a vendor storing data outside the launch jurisdiction (Bangladesh). Cross-border data flow is a deliberate, recorded choice — none of R2/Resend/Twilio have a Bangladesh region, so selecting any of them needs this. |
 | `LV_MAX_NOTE_BYTES` / `LV_MAX_PHOTO_BYTES` / `LV_MAX_PDF_BYTES` | 100 KB / 10 MB / 25 MB | Per-kind content size limits (G5/11.5). |
 | `LV_RECIPIENT_CODE_ATTEMPT_CAP` | `5` | Gated-page one-time-code attempt cap (F4.1); the code locks and a re-issue is required after this many failures. `off` disables the cap. |
 
-Real email / SMS vendors and a managed KMS adapter are still to be written —
-those surfaces run on the in-memory dev adapters / local key, and the bootstrap
-warns so on startup. Each is a one-file adapter behind the existing port,
-selected by the variables above; wiring one does not touch the death path.
-Storage (R2) is wired — see below.
+Push and a managed KMS adapter are still to be written — those surfaces run on
+the in-memory dev adapter / local key, and the bootstrap warns so on startup.
+Each is a one-file adapter behind the existing port, selected by the variables
+above; wiring one does not touch the death path. Email (Resend), SMS (Twilio),
+and storage (R2) are wired — see below.
+
+## Real email and SMS: Resend and Twilio (G1.1)
+
+```
+LV_EMAIL_PROVIDER=resend
+LV_RESEND_API_KEY=re_...
+LV_RESEND_FROM_EMAIL="Legacy Vault <noreply@yourdomain.com>"   # domain must be verified in Resend
+
+LV_SMS_PROVIDER=twilio
+LV_TWILIO_ACCOUNT_SID=AC...
+LV_TWILIO_AUTH_TOKEN=...
+LV_TWILIO_FROM_NUMBER=+1...
+
+LV_VENDOR_DATA_REGION=us   LV_VENDOR_CROSS_BORDER_ACK=1
+```
+
+Both adapters (`src/adapters/channels/resend-email.ts`,
+`src/adapters/channels/twilio-sms.ts`) use plain `fetch` over each vendor's
+REST API — no SDK, matching the Stripe adapter's shape. `sendEmail`/`sendSms`
+are the existing synchronous, void-returning port methods (every caller —
+the scheduler's cadence, the delivery dispatcher, drills — is synchronous), so
+a send fires the real network call without blocking the caller; a failure is
+caught, logged, and reflected in the health probe, never thrown back.
+
+**Honest gap:** the health probe (`probe()`/`refreshProbe()`) verifies the
+API key and connectivity (a lightweight authenticated GET), not actual inbox
+or handset deliverability. The spec (§6) describes a real test send to a
+company-owned address/number with delivery verification — that needs a
+receiving inbox or the vendor's delivery webhooks, which isn't built. What's
+built still catches the common failure modes: an expired key, a revoked
+token, the vendor being unreachable.
+
+## Provisioning an operator account
+
+There is no self-serve way to become an operator (same reasoning as 8.2's "no
+automated self-serve password reset" for users — an automated path to a
+privileged credential is an automated path an attacker could use). Run this
+after deploying, against the same environment your deployment uses:
+
+```
+npm run build
+npm run create-operator -- --email=ops@example.com
+```
+
+With no `--password`, a strong random one is generated and printed once — copy
+it immediately. Re-running with the same `--email` resets that operator's
+password (also how you recover a lost one). Log in at `/console/login`.
+
+## SLO metrics for the cancel endpoint (F7)
+
+The cancel surface is the highest-SLO surface in the product (DECISIONS.md
+6.1) — `main.ts` wires `LoggingRequestMetrics` onto it: one structured JSON
+line per request to stdout, and an `ALERT`-prefixed line to stderr on an error
+status or a slow request (`LV_CANCEL_SLOW_MS`, default 1000 — a log-severity
+threshold only, never a domain timer). Every log platform captures
+stdout/stderr, so this needs no further vendor wiring to page on a broken
+cancel link; point your platform's alerting at stderr lines containing
+`ALERT` for a first pass, or a real APM/metrics vendor for more.
 
 ## Content storage: Cloudflare R2, and decrypt-and-serve (G2)
 

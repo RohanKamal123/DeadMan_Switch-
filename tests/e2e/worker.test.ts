@@ -15,7 +15,7 @@ import {
   InMemorySmsAdapter,
   InMemoryStorageAdapter,
 } from '../../src/adapters';
-import { createWorker, startWorker, startBlobHealthRefresh, flushIfPossible, flushPendingWrites, buildServices, type AppConfig } from '../../src/composition';
+import { createWorker, startWorker, startVendorHealthRefresh, flushIfPossible, flushPendingWrites, buildServices, type AppConfig } from '../../src/composition';
 import { Scheduler, type AuditSinkFactory } from '../../src/runtime';
 import { VERIFYING_THRESHOLD_DAYS, DAY_MS } from '../../src/domain/config';
 
@@ -105,13 +105,13 @@ describe('startWorker (interval loop)', () => {
   });
 });
 
-describe('startBlobHealthRefresh (network-backed storage health, e.g. R2)', () => {
+describe('startVendorHealthRefresh (network-backed vendor health, e.g. R2/Resend/Twilio)', () => {
   beforeEach(() => jest.useFakeTimers());
   afterEach(() => jest.useRealTimers());
 
-  it('is a no-op for a storage adapter with no refreshProbe (e.g. the in-memory dev adapter)', () => {
+  it('is a no-op when no channel adapter has refreshProbe (e.g. every in-memory dev adapter)', () => {
     const state = new InMemoryKeyValueStore();
-    const handle = startBlobHealthRefresh(configWith(state, () => 0), 1000);
+    const handle = startVendorHealthRefresh(configWith(state, () => 0), 1000);
     expect(handle).toBeUndefined();
   });
 
@@ -122,7 +122,7 @@ describe('startBlobHealthRefresh (network-backed storage health, e.g. R2)', () =
     const config = configWith(state, () => 0);
     const withNetworkStorage: AppConfig = { ...config, channels: { ...config.channels, storage: refreshable as never } };
 
-    const handle = startBlobHealthRefresh(withNetworkStorage, 1000);
+    const handle = startVendorHealthRefresh(withNetworkStorage, 1000);
     expect(handle).toBeDefined();
     expect(calls).toBe(1); // immediate
 
@@ -132,6 +132,21 @@ describe('startBlobHealthRefresh (network-backed storage health, e.g. R2)', () =
     handle!.stop();
     jest.advanceTimersByTime(5000);
     expect(calls).toBe(4); // stopped
+  });
+
+  it('refreshes every channel that has refreshProbe independently, not just storage', () => {
+    const state = new InMemoryKeyValueStore();
+    const seen: string[] = [];
+    const refreshable = (name: string) => ({ refreshProbe: async () => { seen.push(name); return true; } });
+    const config = configWith(state, () => 0);
+    const multi: AppConfig = {
+      ...config,
+      channels: { ...config.channels, email: refreshable('email') as never, sms: refreshable('sms') as never, storage: refreshable('storage') as never },
+    };
+
+    const handle = startVendorHealthRefresh(multi, 1000);
+    expect(seen.sort()).toEqual(['email', 'sms', 'storage']);
+    handle!.stop();
   });
 });
 

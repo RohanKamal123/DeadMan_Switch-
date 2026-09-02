@@ -29,8 +29,12 @@ import {
   InMemoryPushAdapter,
   InMemoryStorageAdapter,
   createR2StorageAdapter,
+  ResendEmailAdapter,
+  TwilioSmsAdapter,
   type BlobStore,
   type Channels,
+  type EmailPort,
+  type SmsPort,
   type StoragePort,
 } from '../adapters/channels';
 import { LocalKeyWrapper, type KeyWrapper } from '../adapters/crypto';
@@ -176,29 +180,52 @@ function assertVendorDataLocalization(namedProviders: readonly string[], e: Node
   }
 }
 
-/** Storage providers with a real, wired adapter. Everything else in `channelsFromEnv` still fails the boot. */
-const WIRED_STORAGE_PROVIDERS = new Set(['memory', 'r2']);
+/** Providers with a real, wired adapter, per channel. Everything else still fails the boot. */
+const WIRED_PROVIDERS: Record<'email' | 'sms' | 'push' | 'storage', ReadonlySet<string>> = {
+  email: new Set(['memory', 'resend']),
+  sms: new Set(['memory', 'twilio']),
+  push: new Set(['memory']),
+  storage: new Set(['memory', 'r2']),
+};
+
+/** Reads a set of required env vars for a vendor, throwing with exactly what's missing. */
+function requiredEnv(e: NodeJS.ProcessEnv, providerLabel: string, names: readonly string[]): Record<string, string> {
+  const values: Record<string, string> = {};
+  const missing: string[] = [];
+  for (const name of names) {
+    const v = e[name] ?? '';
+    if (v === '') missing.push(name);
+    values[name] = v;
+  }
+  if (missing.length > 0) {
+    throw new Error(`${providerLabel} requires ${missing.join(', ')}.`);
+  }
+  return values;
+}
 
 /** Reads and validates the R2 credential env vars. Throws with exactly what's missing. */
 function r2OptionsFromEnv(e: NodeJS.ProcessEnv): { accountId: string; accessKeyId: string; secretAccessKey: string; bucket: string; endpoint?: string } {
-  const required: Record<string, string> = {
-    LV_R2_ACCOUNT_ID: e['LV_R2_ACCOUNT_ID'] ?? '',
-    LV_R2_ACCESS_KEY_ID: e['LV_R2_ACCESS_KEY_ID'] ?? '',
-    LV_R2_SECRET_ACCESS_KEY: e['LV_R2_SECRET_ACCESS_KEY'] ?? '',
-    LV_R2_BUCKET: e['LV_R2_BUCKET'] ?? '',
-  };
-  const missing = Object.entries(required).filter(([, v]) => v === '').map(([k]) => k);
-  if (missing.length > 0) {
-    throw new Error(`LV_STORAGE_PROVIDER=r2 requires ${missing.join(', ')} (Cloudflare R2 credentials — see LAUNCH.md).`);
-  }
+  const v = requiredEnv(e, 'LV_STORAGE_PROVIDER=r2', ['LV_R2_ACCOUNT_ID', 'LV_R2_ACCESS_KEY_ID', 'LV_R2_SECRET_ACCESS_KEY', 'LV_R2_BUCKET']);
   const endpoint = e['LV_R2_ENDPOINT'];
   return {
-    accountId: required['LV_R2_ACCOUNT_ID']!,
-    accessKeyId: required['LV_R2_ACCESS_KEY_ID']!,
-    secretAccessKey: required['LV_R2_SECRET_ACCESS_KEY']!,
-    bucket: required['LV_R2_BUCKET']!,
+    accountId: v['LV_R2_ACCOUNT_ID']!,
+    accessKeyId: v['LV_R2_ACCESS_KEY_ID']!,
+    secretAccessKey: v['LV_R2_SECRET_ACCESS_KEY']!,
+    bucket: v['LV_R2_BUCKET']!,
     ...(endpoint !== undefined && endpoint !== '' ? { endpoint } : {}),
   };
+}
+
+/** Reads and validates the Resend credential env vars. Throws with exactly what's missing. */
+function resendEmailFromEnv(e: NodeJS.ProcessEnv): EmailPort {
+  const v = requiredEnv(e, 'LV_EMAIL_PROVIDER=resend', ['LV_RESEND_API_KEY', 'LV_RESEND_FROM_EMAIL']);
+  return new ResendEmailAdapter({ apiKey: v['LV_RESEND_API_KEY']!, from: v['LV_RESEND_FROM_EMAIL']! });
+}
+
+/** Reads and validates the Twilio credential env vars. Throws with exactly what's missing. */
+function twilioSmsFromEnv(e: NodeJS.ProcessEnv): SmsPort {
+  const v = requiredEnv(e, 'LV_SMS_PROVIDER=twilio', ['LV_TWILIO_ACCOUNT_SID', 'LV_TWILIO_AUTH_TOKEN', 'LV_TWILIO_FROM_NUMBER']);
+  return new TwilioSmsAdapter({ accountSid: v['LV_TWILIO_ACCOUNT_SID']!, authToken: v['LV_TWILIO_AUTH_TOKEN']!, fromNumber: v['LV_TWILIO_FROM_NUMBER']! });
 }
 
 /**
@@ -208,11 +235,11 @@ function r2OptionsFromEnv(e: NodeJS.ProcessEnv): { accountId: string; accessKeyI
  * message ever goes silently to the in-memory sink while the operator believes a
  * real vendor is live. Selecting any real vendor also runs the 1.1 gate.
  *
- * Storage is the one channel with a real adapter today: `LV_STORAGE_PROVIDER=r2`
- * builds a Cloudflare R2 adapter (`src/adapters/channels/r2-storage.ts`) for the
- * weekly health probe. `blobStoreFromEnv` below builds the SAME kind of adapter
- * for real content ciphertext (G2) — kept as a separate instance so this function
- *'s signature and every existing caller stay unchanged.
+ * Wired today: `LV_EMAIL_PROVIDER=resend`, `LV_SMS_PROVIDER=twilio`,
+ * `LV_STORAGE_PROVIDER=r2` (`blobStoreFromEnv` below builds a second R2
+ * instance for real content ciphertext, G2 — kept separate so this function's
+ * signature and every existing caller stay unchanged). Push has no real
+ * adapter yet.
  */
 export function channelsFromEnv(e: NodeJS.ProcessEnv = process.env): Channels {
   const providers = {
@@ -223,20 +250,19 @@ export function channelsFromEnv(e: NodeJS.ProcessEnv = process.env): Channels {
   };
   const named = Object.values(providers).filter((p) => p !== 'memory');
   assertVendorDataLocalization(named, e);
-  for (const [kind, provider] of Object.entries(providers)) {
-    if (kind === 'storage' ? WIRED_STORAGE_PROVIDERS.has(provider) : provider === 'memory') continue;
+  for (const [kind, provider] of Object.entries(providers) as [keyof typeof providers, string][]) {
+    if (WIRED_PROVIDERS[kind].has(provider)) continue;
     throw new Error(
       `${kind} provider "${provider}" is selected but no vendor adapter is wired (G1.1). ` +
         `Implement it behind the ${kind} port in src/adapters/channels/ and select it here; ` +
         `until then the boot fails rather than route ${kind} to the in-memory dev sink.`,
     );
   }
-  const storage: StoragePort = providers.storage === 'r2' ? createR2StorageAdapter(r2OptionsFromEnv(e)) : new InMemoryStorageAdapter();
   return {
-    email: new InMemoryEmailAdapter(),
-    sms: new InMemorySmsAdapter(),
+    email: providers.email === 'resend' ? resendEmailFromEnv(e) : new InMemoryEmailAdapter(),
+    sms: providers.sms === 'twilio' ? twilioSmsFromEnv(e) : new InMemorySmsAdapter(),
     push: new InMemoryPushAdapter(),
-    storage,
+    storage: providers.storage === 'r2' ? (createR2StorageAdapter(r2OptionsFromEnv(e)) as StoragePort) : new InMemoryStorageAdapter(),
   };
 }
 
@@ -289,14 +315,14 @@ export async function configFromEnv(): Promise<AppConfig> {
     console.warn('[bootstrap] Using the JSON-file state backend. Set LV_STATE_BACKEND=sqlite|postgres for production.');
   }
   for (const kind of ['EMAIL', 'SMS', 'PUSH', 'STORAGE'] as const) {
-    if ((env(`LV_${kind}_PROVIDER`, 'memory')).toLowerCase() === 'memory') {
+    const provider = env(`LV_${kind}_PROVIDER`, 'memory').toLowerCase();
+    if (provider === 'memory') {
       // eslint-disable-next-line no-console
       console.warn(`[bootstrap] ${kind} channel is the in-memory dev sink — no real ${kind.toLowerCase()} is sent (G1.1).`);
+    } else {
+      // eslint-disable-next-line no-console
+      console.log(`[bootstrap] ${kind} channel: ${provider} — real ${kind.toLowerCase()} is sent (G1.1).`);
     }
-  }
-  if ((env('LV_STORAGE_PROVIDER', 'memory')).toLowerCase() === 'r2') {
-    // eslint-disable-next-line no-console
-    console.log('[bootstrap] Storage provider: Cloudflare R2 — real content ciphertext is offloaded (G2/G1.1).');
   }
   if ((env('LV_KMS_PROVIDER', 'local')).toLowerCase() === 'local') {
     // eslint-disable-next-line no-console

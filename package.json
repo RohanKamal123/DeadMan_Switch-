@@ -9,7 +9,8 @@
     "start": "node dist/src/main.js",
     "serve": "npm run build && node dist/src/main.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "jest"
+    "test": "jest",
+    "create-operator": "node dist/src/cli/create-operator.js"
   },
   "devDependencies": {
     "@types/jest": "^29.5.12",

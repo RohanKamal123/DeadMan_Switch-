@@ -22,7 +22,22 @@
 import type * as http from 'node:http';
 import { configFromEnv, serverRole } from './config/bootstrap';
 import { createCancelOnlyServer } from './config/cancel-bootstrap';
-import { createServers, createWorker, startWorker, startBlobHealthRefresh, flushIfPossible, flushPendingWrites, type AppConfig, type Services, type WorkerHandle } from './composition';
+import { createServers, createWorker, startWorker, startVendorHealthRefresh, flushIfPossible, flushPendingWrites, type AppConfig, type Services, type WorkerHandle } from './composition';
+import { LoggingRequestMetrics } from './http';
+
+/**
+ * The cancel endpoint's uptime/latency signals (F7, DECISIONS.md 6.1) — one
+ * structured line per request, an ALERT-prefixed line to stderr on an error
+ * status or a slow request. Every log platform captures stdout/stderr, so this
+ * needs no extra vendor wiring to be a real "ships to the ops alerting path"
+ * signal. `LV_CANCEL_SLOW_MS` (default 1000) is a log-severity threshold only —
+ * never a domain timer, never gates a transition.
+ */
+function cancelMetrics(): LoggingRequestMetrics {
+  const raw = process.env['LV_CANCEL_SLOW_MS'];
+  const slowMs = raw === undefined || raw === '' ? undefined : Number(raw);
+  return new LoggingRequestMetrics({ label: 'cancel', ...(slowMs !== undefined ? { slowMs } : {}) });
+}
 
 function log(message: string): void {
   // eslint-disable-next-line no-console
@@ -84,7 +99,7 @@ async function main(): Promise<void> {
 
   if (role === 'cancel') {
     // The cancel surface alone — no vendor, crypto, or billing dependency (F1.4).
-    const { server: cancelServer, state } = await createCancelOnlyServer();
+    const { server: cancelServer, state } = await createCancelOnlyServer(cancelMetrics());
     cancelServer.listen(cancelPort, () => {
       log(`[legacy-vault] cancel server on :${cancelPort} (isolated failure domain, LV_SERVER_ROLE=cancel)`);
     });
@@ -93,7 +108,7 @@ async function main(): Promise<void> {
   }
 
   const config: AppConfig = await configFromEnv();
-  const { apiServer, cancelServer, services }: { apiServer: http.Server; cancelServer: http.Server; services: Services } = createServers(config);
+  const { apiServer, cancelServer, services }: { apiServer: http.Server; cancelServer: http.Server; services: Services } = createServers(config, cancelMetrics());
 
   const stoppers: (WorkerHandle | undefined)[] = [];
 
@@ -114,14 +129,14 @@ async function main(): Promise<void> {
     );
     log(`[legacy-vault] worker started (tick every ${intervalMs}ms)`);
 
-    // A network-backed storage adapter (e.g. R2) can't answer its health probe
-    // synchronously — refresh its cache on the same cadence so it doesn't sit
-    // reporting unhealthy forever on a quiet deployment (see r2-storage.ts).
-    // No-op for the in-memory dev adapter.
-    const blobHealth = startBlobHealthRefresh(config, intervalMs);
-    if (blobHealth !== undefined) {
-      stoppers.push(blobHealth);
-      log('[legacy-vault] storage health probe refresh started (network-backed adapter detected)');
+    // A network-backed vendor adapter (R2, Resend, Twilio) can't answer its
+    // health probe synchronously — refresh its cache on the same cadence so it
+    // doesn't sit reporting unhealthy forever on a quiet deployment (see each
+    // adapter's file header). No-op per-channel for the in-memory dev adapters.
+    const vendorHealth = startVendorHealthRefresh(config, intervalMs);
+    if (vendorHealth !== undefined) {
+      stoppers.push(vendorHealth);
+      log('[legacy-vault] vendor health probe refresh started (network-backed adapter(s) detected)');
     }
   } else {
     log('[legacy-vault] worker NOT started here (LV_RUN_WORKER=0) — run it in exactly one process.');

@@ -234,13 +234,21 @@ gives them a transport.
   the gate lives now means turning on the rule later is a config/policy
   change, not a re-architecture.
 
-## F7. The cancel SLO is observable — **DECIDED**
+## F7. The cancel SLO is observable — **DECIDED, built**
 
 - **Decision:** The cancel endpoint (F1) emits **uptime and latency
   signals** to the ops alerting path from day one, because "highest SLO"
   (6.1) is meaningless without measurement. These are operational metrics
   only — **never content, tokens, or account identifiers in log lines**
   (5.3, invariant 6). A cancel that errors pages the team.
+- **Built:** `RequestMetrics` (the port, already scaffolded in Phase F) is
+  wired in `main.ts` to `LoggingRequestMetrics` (`src/http/metrics.ts`) —
+  one structured JSON line per request to stdout, an `ALERT`-prefixed line to
+  stderr on a 5xx or a slow request (`LV_CANCEL_SLOW_MS`, a log-severity
+  threshold only). Every log platform captures stdout/stderr, so this counts
+  as "ships to the ops alerting path" with no further vendor integration
+  required for a first pass; a real APM/metrics vendor can consume the same
+  lines or replace the sink behind the same port later.
 
 ---
 
@@ -369,11 +377,16 @@ concrete per-environment choice, not the code seam.
 - **G1.1** — vendor selection + credentials. Resolved by
   `LV_{EMAIL,SMS,PUSH,STORAGE}_PROVIDER` (default `memory`), gated by the
   1.1 data-localization check (`LV_VENDOR_DATA_REGION` +
-  `LV_VENDOR_CROSS_BORDER_ACK`). **Storage is wired**: `LV_STORAGE_PROVIDER=r2`
-  builds a real Cloudflare R2 adapter (`src/adapters/channels/r2-storage.ts`,
-  the AWS S3 SDK — R2 is S3-compatible — lazy-required like the sqlite/postgres
-  bindings). Email/SMS/push adapters are still to be written — a one-file
-  change behind each port, same shape.
+  `LV_VENDOR_CROSS_BORDER_ACK`). **Storage, email, and SMS are wired**:
+  `LV_STORAGE_PROVIDER=r2` (Cloudflare R2, S3-compatible, the AWS SDK
+  lazy-required like the sqlite/postgres bindings — `src/adapters/channels/
+  r2-storage.ts`), `LV_EMAIL_PROVIDER=resend` (`resend-email.ts`), and
+  `LV_SMS_PROVIDER=twilio` (`twilio-sms.ts`) — the latter two are plain
+  `fetch` over each vendor's REST API, no SDK, matching the Stripe adapter's
+  shape. Their `probe()`/`refreshProbe()` verify credentials/connectivity, not
+  actual inbox/handset deliverability (§6's fuller "real test send, verify it
+  lands" is a documented follow-up). Push has no real adapter yet — a
+  one-file change behind the port, same shape as the other three.
 - **G2.1** — KMS provider + master-key rotation cadence. Resolved by
   `LV_KMS_PROVIDER` (default `local`) + `LV_KMS_KEY_ID` (rotation is a new
   id + key, envelope re-wrap only). A managed-KMS adapter is still to be

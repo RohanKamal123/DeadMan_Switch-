@@ -29,3 +29,46 @@ export class RecordingRequestMetrics implements RequestMetrics {
     this.metrics.push(metric);
   }
 }
+
+export interface LoggingRequestMetricsOptions {
+  /** A prefix identifying which server emitted this (e.g. "cancel"). */
+  readonly label: string;
+  /**
+   * Above this duration, the line is logged as an ops-visible warning rather
+   * than routine output — an OPERATIONAL threshold for log severity only
+   * (never a domain timer, never gates a transition). Default 1000ms.
+   */
+  readonly slowMs?: number;
+}
+
+/**
+ * The real F7 sink: one structured JSON line per request to stdout (every log
+ * platform captures stdout — this needs no vendor integration to be a genuinely
+ * "shipped to the ops alerting path" signal, DECISIONS.md 6.1/F7). An error
+ * status or a slow request additionally logs to stderr with an "ALERT" marker,
+ * so a log platform's error-stream / keyword alerting catches it without any
+ * further wiring. Still just path/method/status/duration/timestamp — never a
+ * token, a code, content, or an account id (invariant 6; 5.3).
+ */
+export class LoggingRequestMetrics implements RequestMetrics {
+  private readonly label: string;
+  private readonly slowMs: number;
+
+  constructor(options: LoggingRequestMetricsOptions) {
+    this.label = options.label;
+    this.slowMs = options.slowMs ?? 1000;
+  }
+
+  record(metric: RequestMetric): void {
+    const line = JSON.stringify({ server: this.label, ...metric });
+    const isError = metric.status >= 500;
+    const isSlow = metric.durationMs > this.slowMs;
+    if (isError || isSlow) {
+      // eslint-disable-next-line no-console
+      console.error(`[metrics:ALERT:${this.label}] ${isError ? 'error status' : 'slow request'}: ${line}`);
+    } else {
+      // eslint-disable-next-line no-console
+      console.log(`[metrics:${this.label}] ${line}`);
+    }
+  }
+}

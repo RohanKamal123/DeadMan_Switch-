@@ -376,7 +376,7 @@ export function startWorker(scheduler: Scheduler, options: StartWorkerOptions): 
   };
 }
 
-/** A storage adapter whose health can only be checked asynchronously (e.g. R2 — see r2-storage.ts). */
+/** A vendor adapter whose health can only be checked asynchronously (e.g. R2, Resend, Twilio). */
 interface RefreshableProbe {
   refreshProbe(): Promise<boolean>;
 }
@@ -386,23 +386,30 @@ function hasRefreshProbe(x: unknown): x is RefreshableProbe {
 }
 
 /**
- * Actively refresh a network-backed storage adapter's cached health (e.g. R2's
- * `probe()` — see r2-storage.ts's file header: it defaults to unhealthy and is
- * otherwise only updated by real content traffic). Without this, a quiet
- * deployment with no content activity would have its storage probe stuck
- * reporting unhealthy forever, blocking entry to VERIFYING indefinitely (safe,
- * per veto path 3, but not the intended behavior). A no-op when the configured
- * storage adapter has no `refreshProbe` (the in-memory dev adapter, most other
- * future adapters that CAN answer synchronously).
+ * Actively refresh every configured channel adapter's cached health that needs
+ * it (R2's storage probe, Resend's/Twilio's email/SMS probes — see each
+ * adapter's file header: all default unhealthy and are otherwise only updated
+ * by real send/put/get traffic). Without this, a quiet deployment with no
+ * activity on a given channel would have that probe stuck reporting unhealthy
+ * forever, blocking entry to VERIFYING indefinitely (safe, per veto path 3, but
+ * not the intended behavior — email/sms aren't even part of the health-gate
+ * dependency set, but a stuck-unhealthy probe would still mislead an operator
+ * reading it). A no-op per-channel when that adapter has no `refreshProbe` (the
+ * in-memory dev adapters, or any future adapter that can answer synchronously).
+ * Runs each channel's refresh independently — one vendor being down never stops
+ * the others from refreshing.
  */
-export function startBlobHealthRefresh(config: AppConfig, intervalMs: number): WorkerHandle | undefined {
-  const candidate = config.channels.storage;
-  if (!hasRefreshProbe(candidate)) return undefined;
+export function startVendorHealthRefresh(config: AppConfig, intervalMs: number): WorkerHandle | undefined {
+  const allChannels: readonly unknown[] = [config.channels.email, config.channels.sms, config.channels.push, config.channels.storage];
+  const candidates = allChannels.filter(hasRefreshProbe);
+  if (candidates.length === 0) return undefined;
   const runOnce = (): void => {
-    candidate.refreshProbe().catch(() => {
-      // refreshProbe already fails safe internally (never throws); this catch
-      // exists only to satisfy the no-floating-promise rule.
-    });
+    for (const candidate of candidates) {
+      candidate.refreshProbe().catch(() => {
+        // refreshProbe already fails safe internally (never throws); this catch
+        // exists only to satisfy the no-floating-promise rule.
+      });
+    }
   };
   runOnce();
   const timer = setInterval(runOnce, intervalMs);

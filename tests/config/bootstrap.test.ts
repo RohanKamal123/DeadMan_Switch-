@@ -94,8 +94,14 @@ describe('channelsFromEnv (G1.1 + 1.1 data-localization gate)', () => {
   });
   it('refuses a named-but-unwired provider rather than routing to the dev sink', () => {
     // A real region + ack, so the failure is specifically "not wired", not the gate.
+    // Push has no real adapter yet — a genuinely unwired case (unlike email/sms/storage now).
     expect(() =>
-      channelsFromEnv(env({ LV_SMS_PROVIDER: 'twilio', LV_VENDOR_DATA_REGION: 'bd' })),
+      channelsFromEnv(env({ LV_PUSH_PROVIDER: 'onesignal', LV_VENDOR_DATA_REGION: 'bd' })),
+    ).toThrow(/G1\.1|no vendor adapter/);
+  });
+  it('also refuses an unknown value for a channel that DOES have a wired provider (e.g. sms=nexmo, not twilio)', () => {
+    expect(() =>
+      channelsFromEnv(env({ LV_SMS_PROVIDER: 'nexmo', LV_VENDOR_DATA_REGION: 'bd' })),
     ).toThrow(/G1\.1|no vendor adapter/);
   });
   it('requires a declared data region for any real vendor (1.1)', () => {
@@ -131,6 +137,57 @@ describe('channelsFromEnv — R2 storage selection (G1.1/G2)', () => {
 
   it('still runs the 1.1 data-localization gate for r2 like any other real vendor', () => {
     const { LV_VENDOR_DATA_REGION: _drop, ...noRegion } = R2_ENV;
+    expect(() => channelsFromEnv(env(noRegion))).toThrow(/LV_VENDOR_DATA_REGION/);
+  });
+});
+
+const RESEND_ENV = {
+  LV_EMAIL_PROVIDER: 'resend',
+  LV_VENDOR_DATA_REGION: 'us',
+  LV_VENDOR_CROSS_BORDER_ACK: '1',
+  LV_RESEND_API_KEY: 're_123',
+  LV_RESEND_FROM_EMAIL: 'Legacy Vault <noreply@x.test>',
+};
+
+describe('channelsFromEnv — Resend email selection (G1.1)', () => {
+  it('builds a real, working Resend adapter for channels.email', () => {
+    const channels = channelsFromEnv(env(RESEND_ENV));
+    expect(channels.email.probe()).toBe(false); // conservative default, no traffic yet
+  });
+
+  it('validates Resend credentials before ever sending', () => {
+    const { LV_RESEND_FROM_EMAIL: _drop, ...missing } = RESEND_ENV;
+    expect(() => channelsFromEnv(env(missing))).toThrow(/LV_RESEND_FROM_EMAIL/);
+  });
+
+  it('still runs the 1.1 data-localization gate for resend like any other real vendor', () => {
+    const { LV_VENDOR_CROSS_BORDER_ACK: _drop, ...noAck } = RESEND_ENV;
+    expect(() => channelsFromEnv(env(noAck))).toThrow(/cross-border|LV_VENDOR_CROSS_BORDER_ACK/);
+  });
+});
+
+const TWILIO_ENV = {
+  LV_SMS_PROVIDER: 'twilio',
+  LV_VENDOR_DATA_REGION: 'us',
+  LV_VENDOR_CROSS_BORDER_ACK: '1',
+  LV_TWILIO_ACCOUNT_SID: 'AC123',
+  LV_TWILIO_AUTH_TOKEN: 'tok123',
+  LV_TWILIO_FROM_NUMBER: '+15550001111',
+};
+
+describe('channelsFromEnv — Twilio SMS selection (G1.1)', () => {
+  it('builds a real, working Twilio adapter for channels.sms', () => {
+    const channels = channelsFromEnv(env(TWILIO_ENV));
+    expect(channels.sms.probe()).toBe(false); // conservative default, no traffic yet
+  });
+
+  it('validates Twilio credentials before ever sending', () => {
+    const { LV_TWILIO_AUTH_TOKEN: _drop, ...missing } = TWILIO_ENV;
+    expect(() => channelsFromEnv(env(missing))).toThrow(/LV_TWILIO_AUTH_TOKEN/);
+  });
+
+  it('still runs the 1.1 data-localization gate for twilio like any other real vendor', () => {
+    const { LV_VENDOR_DATA_REGION: _drop, ...noRegion } = TWILIO_ENV;
     expect(() => channelsFromEnv(env(noRegion))).toThrow(/LV_VENDOR_DATA_REGION/);
   });
 });
