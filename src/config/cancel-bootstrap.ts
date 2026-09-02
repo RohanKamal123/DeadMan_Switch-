@@ -10,13 +10,19 @@
 // is down or misconfigured, a living user's cancel link still works.
 
 import * as http from 'node:http';
-import { MachineRepository } from '../persistence';
+import { MachineRepository, type KeyValueStore } from '../persistence';
 import { CancelService } from '../app/cancel-service';
 import { createCancelServer } from '../http/server';
 import type { CancelFallback } from '../http/pages';
 import { cancelSecretsFromEnv } from '../adapters/secrets';
 import type { RequestMetrics } from '../http/metrics';
 import { stateBackend, auditFactory } from './state';
+
+export interface CancelOnlyServer {
+  readonly server: http.Server;
+  /** Exposed so the caller can flush pending writes (Postgres backend) before shutdown. */
+  readonly state: KeyValueStore;
+}
 
 function env(name: string, fallback = ''): string {
   return process.env[name] ?? fallback;
@@ -35,11 +41,12 @@ export function cancelFallbackFromEnv(): CancelFallback {
  * state store, the audit sink, and the cancel secret — nothing else. Returns an
  * unstarted server; call `.listen(...)`.
  */
-export async function createCancelOnlyServer(metrics?: RequestMetrics): Promise<http.Server> {
+export async function createCancelOnlyServer(metrics?: RequestMetrics): Promise<CancelOnlyServer> {
   const state = await stateBackend();
   const auditFor = auditFactory();
   const machines = new MachineRepository(state);
   const service = new CancelService({ machines, auditFor, secret: cancelSecretsFromEnv() });
   const deps = { service, fallback: cancelFallbackFromEnv(), now: () => Date.now() };
-  return createCancelServer(deps, metrics === undefined ? {} : { metrics });
+  const server = createCancelServer(deps, metrics === undefined ? {} : { metrics });
+  return { server, state };
 }

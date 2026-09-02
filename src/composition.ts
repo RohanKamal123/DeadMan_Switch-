@@ -274,6 +274,41 @@ export function createServers(config: AppConfig, metrics?: RequestMetrics): Serv
   return { cancelServer, apiServer, services };
 }
 
+interface Flushable {
+  flush(): Promise<void>;
+}
+
+function hasFlush(x: unknown): x is Flushable {
+  return typeof x === 'object' && x !== null && typeof (x as { flush?: unknown }).flush === 'function';
+}
+
+/**
+ * Await a value's pending durable writes if it has any (duck-typed: state
+ * backends and services that queue writes expose `flush()`; most don't and this
+ * is a no-op for them). Exported so both the combined/api process and the
+ * isolated cancel-only process (which has no `Services`, just its own `state`)
+ * can flush before exiting.
+ */
+export async function flushIfPossible(x: unknown): Promise<void> {
+  if (hasFlush(x)) await x.flush();
+}
+
+/**
+ * Await every pending durable write before the process exits. `config.state`
+ * (the Postgres backend only — see PostgresKeyValueStore) and
+ * `services.authoring` (queued blob writes, e.g. to R2) both hold writes on an
+ * internal async queue for exactly the reason `PostgresKeyValueStore`'s own
+ * header explains: the rest of the system needs a synchronous KeyValueStore
+ * contract, so a real network write happens after the call returns. A process
+ * killed without this can lose the last few writes — call this from a SIGTERM/
+ * SIGINT handler before the servers close. A no-op for the in-memory/file/
+ * SQLite backends and a deployment with no blob store (every write there is
+ * already synchronous or per-write durable).
+ */
+export async function flushPendingWrites(config: AppConfig, services: Services): Promise<void> {
+  await Promise.all([flushIfPossible(config.state), flushIfPossible(services.authoring)]);
+}
+
 /**
  * Build the Phase-E worker (the scheduler) wired to the real channel senders and
  * health probers. This is the clock that advances the death path over time:

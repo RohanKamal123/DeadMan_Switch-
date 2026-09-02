@@ -11,10 +11,18 @@
 //
 //   LV_PORT / LV_CANCEL_PORT   ports (default 8080 / 8081)
 //   see src/config/bootstrap.ts for backend, vendor, KMS, policy, and secrets.
+//
+// GRACEFUL SHUTDOWN: a platform redeploy or restart sends SIGTERM. The Postgres
+// state backend and blob-store writes (R2) queue real network writes behind a
+// synchronous KeyValueStore contract (PostgresKeyValueStore's header explains
+// why) — killed without flushing, the last few writes before shutdown could be
+// lost. On SIGTERM/SIGINT this stops the worker/health-refresh intervals first
+// (no new work starts), flushes pending writes, then closes the servers.
 
+import type * as http from 'node:http';
 import { configFromEnv, serverRole } from './config/bootstrap';
 import { createCancelOnlyServer } from './config/cancel-bootstrap';
-import { createServers, createWorker, startWorker, startBlobHealthRefresh } from './composition';
+import { createServers, createWorker, startWorker, startBlobHealthRefresh, flushIfPossible, flushPendingWrites, type AppConfig, type Services, type WorkerHandle } from './composition';
 
 function log(message: string): void {
   // eslint-disable-next-line no-console
@@ -37,6 +45,38 @@ function runWorkerHere(): boolean {
   return (process.env['LV_RUN_WORKER'] ?? '1') !== '0';
 }
 
+function closeServer(server: http.Server): Promise<void> {
+  return new Promise((resolve) => server.close(() => resolve()));
+}
+
+/** Stop background intervals, close listening sockets, flush pending writes, then exit. Runs once. */
+function installShutdown(
+  stoppers: readonly (WorkerHandle | undefined)[],
+  servers: readonly http.Server[],
+  flush: () => Promise<void>,
+): void {
+  let shuttingDown = false;
+  const handler = (signal: NodeJS.Signals): void => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    log(`[legacy-vault] ${signal} received — shutting down gracefully`);
+    void (async () => {
+      for (const s of stoppers) s?.stop();
+      await Promise.all(servers.map(closeServer));
+      try {
+        await flush();
+      } catch (error) {
+        // eslint-disable-next-line no-console
+        console.error('[legacy-vault] a pending write failed to flush during shutdown:', error);
+      }
+      log('[legacy-vault] shutdown complete');
+      process.exit(0);
+    })();
+  };
+  process.on('SIGTERM', handler);
+  process.on('SIGINT', handler);
+}
+
 async function main(): Promise<void> {
   const role = serverRole();
   const port = Number(process.env['LV_PORT'] ?? 8080);
@@ -44,36 +84,43 @@ async function main(): Promise<void> {
 
   if (role === 'cancel') {
     // The cancel surface alone — no vendor, crypto, or billing dependency (F1.4).
-    const cancelServer = await createCancelOnlyServer();
+    const { server: cancelServer, state } = await createCancelOnlyServer();
     cancelServer.listen(cancelPort, () => {
       log(`[legacy-vault] cancel server on :${cancelPort} (isolated failure domain, LV_SERVER_ROLE=cancel)`);
     });
+    installShutdown([], [cancelServer], () => flushIfPossible(state));
     return;
   }
 
-  const config = await configFromEnv();
-  const { apiServer, cancelServer } = createServers(config);
+  const config: AppConfig = await configFromEnv();
+  const { apiServer, cancelServer, services }: { apiServer: http.Server; cancelServer: http.Server; services: Services } = createServers(config);
+
+  const stoppers: (WorkerHandle | undefined)[] = [];
 
   // Start the death-path clock (Phase-E worker). Without it, no account ever
   // advances, no reminder fires, and the weekly health check never runs. It can
   // never release early (the guards forbid it); a slow tick only ever delays.
   if (runWorkerHere()) {
     const intervalMs = workerIntervalMs();
-    startWorker(createWorker(config), {
-      intervalMs,
-      onError: (error) => {
-        // A tick failure delays; it never releases. Log and keep going.
-        // eslint-disable-next-line no-console
-        console.error('[legacy-vault] worker tick failed (will retry next interval):', error);
-      },
-    });
+    stoppers.push(
+      startWorker(createWorker(config), {
+        intervalMs,
+        onError: (error) => {
+          // A tick failure delays; it never releases. Log and keep going.
+          // eslint-disable-next-line no-console
+          console.error('[legacy-vault] worker tick failed (will retry next interval):', error);
+        },
+      }),
+    );
     log(`[legacy-vault] worker started (tick every ${intervalMs}ms)`);
 
     // A network-backed storage adapter (e.g. R2) can't answer its health probe
     // synchronously — refresh its cache on the same cadence so it doesn't sit
     // reporting unhealthy forever on a quiet deployment (see r2-storage.ts).
     // No-op for the in-memory dev adapter.
-    if (startBlobHealthRefresh(config, intervalMs) !== undefined) {
+    const blobHealth = startBlobHealthRefresh(config, intervalMs);
+    if (blobHealth !== undefined) {
+      stoppers.push(blobHealth);
       log('[legacy-vault] storage health probe refresh started (network-backed adapter detected)');
     }
   } else {
@@ -84,13 +131,17 @@ async function main(): Promise<void> {
     log(`[legacy-vault] web server on :${port}`);
   });
 
+  const servers: http.Server[] = [apiServer];
   if (role === 'combined') {
     cancelServer.listen(cancelPort, () => {
       log(`[legacy-vault] cancel server on :${cancelPort} (isolated failure domain)`);
     });
+    servers.push(cancelServer);
   } else {
     log('[legacy-vault] cancel server NOT started here (LV_SERVER_ROLE=api) — run a separate LV_SERVER_ROLE=cancel process.');
   }
+
+  installShutdown(stoppers, servers, () => flushPendingWrites(config, services));
 }
 
 main().catch((error: unknown) => {

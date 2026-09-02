@@ -15,7 +15,7 @@ import {
   InMemorySmsAdapter,
   InMemoryStorageAdapter,
 } from '../../src/adapters';
-import { createWorker, startWorker, startBlobHealthRefresh, type AppConfig } from '../../src/composition';
+import { createWorker, startWorker, startBlobHealthRefresh, flushIfPossible, flushPendingWrites, buildServices, type AppConfig } from '../../src/composition';
 import { Scheduler, type AuditSinkFactory } from '../../src/runtime';
 import { VERIFYING_THRESHOLD_DAYS, DAY_MS } from '../../src/domain/config';
 
@@ -132,5 +132,41 @@ describe('startBlobHealthRefresh (network-backed storage health, e.g. R2)', () =
     handle!.stop();
     jest.advanceTimersByTime(5000);
     expect(calls).toBe(4); // stopped
+  });
+});
+
+describe('flushIfPossible / flushPendingWrites (graceful shutdown)', () => {
+  it('is a no-op for a value with no flush method (in-memory/SQLite/file backends)', async () => {
+    await expect(flushIfPossible({})).resolves.toBeUndefined();
+    await expect(flushIfPossible(undefined)).resolves.toBeUndefined();
+  });
+
+  it('awaits flush() when the value has one (e.g. the Postgres backend)', async () => {
+    let flushed = false;
+    const flushable = { flush: async () => { flushed = true; } };
+    await flushIfPossible(flushable);
+    expect(flushed).toBe(true);
+  });
+
+  it('propagates a flush failure rather than swallowing it', async () => {
+    const flushable = { flush: async () => { throw new Error('write failed'); } };
+    await expect(flushIfPossible(flushable)).rejects.toThrow('write failed');
+  });
+
+  it('flushPendingWrites flushes both state and authoring when they support it', async () => {
+    const state = new InMemoryKeyValueStore();
+    const config = configWith(state, () => 0);
+    const stateFlushed: boolean[] = [];
+    const flushableState = { ...state, flush: async () => { stateFlushed.push(true); } };
+    const configWithFlush: AppConfig = { ...config, state: flushableState as never };
+    const services = buildServices(configWithFlush);
+
+    let authoringFlushed = false;
+    const originalFlush = services.authoring.flush.bind(services.authoring);
+    services.authoring.flush = async () => { authoringFlushed = true; await originalFlush(); };
+
+    await flushPendingWrites(configWithFlush, services);
+    expect(stateFlushed).toEqual([true]);
+    expect(authoringFlushed).toBe(true);
   });
 });
