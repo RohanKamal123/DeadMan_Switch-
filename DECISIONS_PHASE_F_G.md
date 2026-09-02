@@ -199,7 +199,12 @@ gives them a transport.
   - The page renders content **server-side, streamed from decrypted
     storage per view**; nothing sensitive is placed in a URL, a query
     string, or client storage (consistent with invariant 6's spirit that
-    channels never leak content, UX §2/§4).
+    channels never leak content, UX §2/§4). **Built**: `ReleaseService`
+    decrypts via `EnvelopeCrypto` and returns real content on a successful
+    authenticate — resolving ciphertext from the KV store inline or, when
+    offloaded (G1.1's R2 adapter), from the configured `BlobStore`. Works
+    for every deployment, not only R2 ones (`crypto` is always wired in
+    `composition.ts`).
 - **F4.1 — OPEN:** the numeric attempt cap and re-issue throttle are
   deployment config (a `RecipientAccessPolicy`, mirroring how content size
   limits are handled, 11.5), never a threshold invented in the domain.
@@ -229,13 +234,21 @@ gives them a transport.
   the gate lives now means turning on the rule later is a config/policy
   change, not a re-architecture.
 
-## F7. The cancel SLO is observable — **DECIDED**
+## F7. The cancel SLO is observable — **DECIDED, built**
 
 - **Decision:** The cancel endpoint (F1) emits **uptime and latency
   signals** to the ops alerting path from day one, because "highest SLO"
   (6.1) is meaningless without measurement. These are operational metrics
   only — **never content, tokens, or account identifiers in log lines**
   (5.3, invariant 6). A cancel that errors pages the team.
+- **Built:** `RequestMetrics` (the port, already scaffolded in Phase F) is
+  wired in `main.ts` to `LoggingRequestMetrics` (`src/http/metrics.ts`) —
+  one structured JSON line per request to stdout, an `ALERT`-prefixed line to
+  stderr on a 5xx or a slow request (`LV_CANCEL_SLOW_MS`, a log-severity
+  threshold only). Every log platform captures stdout/stderr, so this counts
+  as "ships to the ops alerting path" with no further vendor integration
+  required for a first pass; a real APM/metrics vendor can consume the same
+  lines or replace the sink behind the same port later.
 
 ---
 
@@ -344,18 +357,43 @@ Implements the F3 seam and the security decisions already in `DECISIONS.md`.
 ## Still open after Phases F & G
 
 Carried forward; none blocks starting the phases, each gates a specific
-piece:
+piece. **The deployment-config mechanism for the items below now lives in
+`src/config/bootstrap.ts`** (and `src/config/cancel-bootstrap.ts` for F1.5):
+each is resolved from the environment behind an existing port, with
+conservative defaults, and a named-but-unwired provider **fails the boot**
+rather than falling back to a dev stand-in. What remains OPEN is the
+concrete per-environment choice, not the code seam.
 
 - **F1.5** — cancel-surface deployment topology (separate process/host).
-  Ops, before pilot launch.
+  Resolved by `LV_SERVER_ROLE=combined|api|cancel`; the `cancel` role boots
+  on the state store + `LV_CANCEL_SECRET` alone (no KMS/vendor/billing
+  dependency). Ops picks the topology before pilot launch.
 - **F4.1** — recipient-access attempt cap / re-issue throttle
-  (`RecipientAccessPolicy`). Deployment config.
+  (`RecipientAccessPolicy`). Resolved by `LV_RECIPIENT_CODE_ATTEMPT_CAP`
+  (default 5; `off` disables); enforced in the delivery engine. The number
+  is deployment config.
 - **F6 / 11.6** — minors / legal-capacity rule. Gate placement decided;
   rule pending counsel.
-- **G1.1** — vendor selection + credentials, gated by the 1.1
-  data-localization check for abroad vendors.
-- **G2.1** — KMS provider + master-key rotation cadence. Deployment config.
-- **G5 / 11.5** — content size limits (`ContentPolicy`). Deployment config.
+- **G1.1** — vendor selection + credentials. Resolved by
+  `LV_{EMAIL,SMS,PUSH,STORAGE}_PROVIDER` (default `memory`), gated by the
+  1.1 data-localization check (`LV_VENDOR_DATA_REGION` +
+  `LV_VENDOR_CROSS_BORDER_ACK`). **Storage, email, and SMS are wired**:
+  `LV_STORAGE_PROVIDER=r2` (Cloudflare R2, S3-compatible, the AWS SDK
+  lazy-required like the sqlite/postgres bindings — `src/adapters/channels/
+  r2-storage.ts`), `LV_EMAIL_PROVIDER=resend` (`resend-email.ts`), and
+  `LV_SMS_PROVIDER=twilio` (`twilio-sms.ts`) — the latter two are plain
+  `fetch` over each vendor's REST API, no SDK, matching the Stripe adapter's
+  shape. Their `probe()`/`refreshProbe()` verify credentials/connectivity, not
+  actual inbox/handset deliverability (§6's fuller "real test send, verify it
+  lands" is a documented follow-up). Push has no real adapter yet — a
+  one-file change behind the port, same shape as the other three.
+- **G2.1** — KMS provider + master-key rotation cadence. Resolved by
+  `LV_KMS_PROVIDER` (default `local`) + `LV_KMS_KEY_ID` (rotation is a new
+  id + key, envelope re-wrap only). A managed-KMS adapter is still to be
+  written.
+- **G5 / 11.5** — content size limits (`ContentPolicy`). Resolved by
+  `LV_MAX_{NOTE,PHOTO,PDF}_BYTES` (conservative defaults). Deployment
+  config.
 - **2.3 / 11.2** — automated dormancy/lapse policy. Still deferred to
   post-pilot; intersects billing, not F/G directly.
 

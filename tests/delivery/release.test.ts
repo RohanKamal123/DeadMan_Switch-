@@ -12,6 +12,7 @@ import type { Confirmation } from '../../src/domain/quorum';
 import {
   ReleaseController,
   ReleaseNotReadyError,
+  type RecipientAccessPolicy,
   type ReleaseRecipient,
 } from '../../src/delivery/release';
 import { CODE_EXPIRY_HOURS, HOUR_MS, RECIPIENT_FALLBACK_DAYS, DAY_MS } from '../../src/domain/config';
@@ -49,6 +50,7 @@ function controller(opts: {
   confirmations?: Confirmation[];
   state?: 'PRIVATE_RELEASE' | 'HOLD';
   audit?: AuditLog;
+  accessPolicy?: RecipientAccessPolicy;
 }) {
   const gen = sequences();
   return new ReleaseController({
@@ -59,6 +61,7 @@ function controller(opts: {
     audit: opts.audit ?? new AuditLog(),
     codeGenerator: gen.codeGenerator,
     linkGenerator: gen.linkGenerator,
+    ...(opts.accessPolicy ? { accessPolicy: opts.accessPolicy } : {}),
   });
 }
 
@@ -186,5 +189,65 @@ describe('ReleaseController — ordering, self-dealing, and fallback', () => {
     const step = c.advanceIfSilent(RELEASED_AT + RECIPIENT_FALLBACK_DAYS * DAY_MS);
     expect(step.messages).toHaveLength(0);
     expect(c.records().find((r) => r.recipientId === 'r2')?.status).toBe('pending');
+  });
+});
+
+describe('ReleaseController — recipient access policy (F4.1 attempt cap)', () => {
+  const CAP: RecipientAccessPolicy = { codeAttemptCap: 3 };
+
+  it('locks the code after the configured number of failed attempts, even for the correct code', () => {
+    const c = controller({ recipients: [recipient('r1')], accessPolicy: CAP });
+    c.begin(RELEASED_AT);
+    // Three wrong guesses exhaust the budget…
+    for (let i = 0; i < 3; i++) {
+      expect(c.authenticate('link-1', 'WRONG', RELEASED_AT + HOUR_MS).ok).toBe(false);
+    }
+    // …after which even the CORRECT code is refused until a re-issue.
+    const locked = c.authenticate('link-1', 'CODE1', RELEASED_AT + HOUR_MS);
+    expect(locked.ok).toBe(false);
+    if (!locked.ok) expect(locked.reason).toMatch(/attempt|re-issue|new code/i);
+  });
+
+  it('does not lock before the cap is reached', () => {
+    const c = controller({ recipients: [recipient('r1')], accessPolicy: CAP });
+    c.begin(RELEASED_AT);
+    expect(c.authenticate('link-1', 'WRONG', RELEASED_AT + HOUR_MS).ok).toBe(false);
+    expect(c.authenticate('link-1', 'WRONG', RELEASED_AT + HOUR_MS).ok).toBe(false);
+    // Third presentation is the correct code, still within budget → succeeds.
+    expect(c.authenticate('link-1', 'CODE1', RELEASED_AT + HOUR_MS).ok).toBe(true);
+  });
+
+  it('a re-issue resets the attempt budget (F4.1 "re-issue required")', () => {
+    const c = controller({ recipients: [recipient('r1')], accessPolicy: CAP });
+    c.begin(RELEASED_AT);
+    for (let i = 0; i < 3; i++) c.authenticate('link-1', 'WRONG', RELEASED_AT + HOUR_MS);
+    expect(c.authenticate('link-1', 'CODE1', RELEASED_AT + HOUR_MS).ok).toBe(false); // locked
+    const re = c.reissueCode('r1', RELEASED_AT + HOUR_MS);
+    expect(re.ok).toBe(true);
+    if (!re.ok) return;
+    // Fresh code, fresh budget.
+    expect(c.authenticate('link-1', re.sms.code, RELEASED_AT + HOUR_MS).ok).toBe(true);
+  });
+
+  it('applies no cap when no policy is configured (backward compatible)', () => {
+    const c = controller({ recipients: [recipient('r1')] });
+    c.begin(RELEASED_AT);
+    for (let i = 0; i < 25; i++) c.authenticate('link-1', 'WRONG', RELEASED_AT + HOUR_MS);
+    // Correct code still works — no lockout without a policy.
+    expect(c.authenticate('link-1', 'CODE1', RELEASED_AT + HOUR_MS).ok).toBe(true);
+  });
+
+  it('carries the attempt count across a snapshot/restore', () => {
+    const c = controller({ recipients: [recipient('r1')], accessPolicy: CAP });
+    c.begin(RELEASED_AT);
+    c.authenticate('link-1', 'WRONG', RELEASED_AT + HOUR_MS);
+    c.authenticate('link-1', 'WRONG', RELEASED_AT + HOUR_MS);
+    const snap = c.snapshot();
+
+    const restored = controller({ recipients: [recipient('r1')], accessPolicy: CAP });
+    restored.restore(snap);
+    // One more failure reaches the cap and locks.
+    expect(restored.authenticate('link-1', 'WRONG', RELEASED_AT + HOUR_MS).ok).toBe(false);
+    expect(restored.authenticate('link-1', 'CODE1', RELEASED_AT + HOUR_MS).ok).toBe(false);
   });
 });

@@ -11,4 +11,7 @@
 export * from './sinks';
 export * from './audit-store';
 export * from './kv';
+export * from './sql-kv';
+export * from './sqlite';
+export * from './postgres-kv';
 export * from './repository';

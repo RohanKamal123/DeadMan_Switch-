@@ -30,11 +30,48 @@ export interface PushPort {
   probe(): boolean;
 }
 
-/** Encrypted-blob storage. `probe` verifies a stored payload round-trips (§6). */
+/**
+ * The storage dependency's health signal for the weekly check (§6): "verifies a
+ * stored payload round-trips." Deliberately narrow — `probe()` is the only
+ * method any real caller (`dependencyProbers`) ever calls; the underlying
+ * round-trip a concrete adapter performs to answer it is its own business, not
+ * part of this contract. This narrowness is what lets `R2StorageAdapter`
+ * implement it ALONGSIDE the separate async `BlobStore` port without a
+ * sync-vs-async `put`/`get` name collision between the two.
+ */
 export interface StoragePort {
-  put(key: string, bytes: string): void;
-  get(key: string): string | undefined;
   probe(): boolean;
+}
+
+/**
+ * Async blob storage for actual content ciphertext (G2, offloading large payload
+ * bytes out of the KV state store — a photo/PDF up to the deployment's
+ * `ContentPolicy` limit does not belong inline in a SQL row). Deliberately a
+ * SEPARATE port from `StoragePort`: a real network-backed blob store cannot
+ * satisfy `StoragePort`'s synchronous contract without either holding every
+ * account's every payload in memory (defeats the point of offloading) or a
+ * synchronous-network hack (unsound). `AuthoringService` (write) and
+ * `ReleaseService` (read, to decrypt-and-serve) are the only two callers; the KV
+ * state store keeps owning payload METADATA either way — this only carries bytes.
+ */
+export interface BlobStore {
+  put(key: string, bytes: Buffer): Promise<void>;
+  get(key: string): Promise<Buffer | undefined>;
+  delete(key: string): Promise<void>;
+}
+
+/** In-memory `BlobStore` for tests and local dev. */
+export class InMemoryBlobStore implements BlobStore {
+  private readonly blobs = new Map<string, Buffer>();
+  async put(key: string, bytes: Buffer): Promise<void> {
+    this.blobs.set(key, bytes);
+  }
+  async get(key: string): Promise<Buffer | undefined> {
+    return this.blobs.get(key);
+  }
+  async delete(key: string): Promise<void> {
+    this.blobs.delete(key);
+  }
 }
 
 /**

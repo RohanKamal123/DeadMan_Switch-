@@ -17,3 +17,4 @@ export * from './authoring-service';
 export * from './admin-service';
 export * from './drill-service';
 export * from './public-release-service';
+export * from './account-service';

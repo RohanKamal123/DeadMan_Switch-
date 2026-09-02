@@ -48,7 +48,7 @@ function recipient(id: string): Contact {
 }
 
 describe('full lifecycle: ACTIVE → … → PUBLIC_RELEASE', () => {
-  it('releases authored content to the right recipient, decryptable, only after every window', () => {
+  it('releases authored content to the right recipient, decryptable, only after every window', async () => {
     const store = new InMemoryKeyValueStore();
     const cursorStore = new InMemoryKeyValueStore();
     const machines = new MachineRepository(store);
@@ -72,11 +72,11 @@ describe('full lifecycle: ACTIVE → … → PUBLIC_RELEASE', () => {
     const people = new PeopleService({ contacts, machines, recipientOrders });
     const authoring = new AuthoringService({ payloads, contacts, machines, policy: POLICY });
     const operators = new OperatorService({ machines, contacts, caseFiles: new CaseFileRepository(store), auditFor });
-    const release = new ReleaseService({ machines, contacts, payloads, plans, deliveries, auditFor });
+    const crypto = new EnvelopeCrypto(new LocalKeyWrapper({ keyId: 'kms-1', masterKey: randomBytes(32) }));
+    const release = new ReleaseService({ machines, contacts, payloads, plans, deliveries, auditFor, crypto });
     const publisher = new InMemoryPublicPublisher();
     const publicRelease = new PublicReleaseService({ machines, publisher, auditFor });
     const scheduler = new Scheduler({ machines, cursorStore, auditFor, reminderSender: new RecordingReminderSender() });
-    const crypto = new EnvelopeCrypto(new LocalKeyWrapper({ keyId: 'kms-1', masterKey: randomBytes(32) }));
 
     // --- ACTIVE: set up account, people, content (public enabled) -----------
     machines.save('acct', new Machine({ now: T0, publicReleaseEnabled: true }));
@@ -121,12 +121,14 @@ describe('full lifecycle: ACTIVE → … → PUBLIC_RELEASE', () => {
     const sms = begun.messages.find((m) => m.channel === 'sms');
     if (email?.channel !== 'email' || sms?.channel !== 'sms') throw new Error('missing messages');
 
-    const auth = release.authenticate('acct', email.gatedLink, sms.code, privateAt + 1000);
+    const auth = await release.authenticate('acct', email.gatedLink, sms.code, privateAt + 1000);
     expect(auth.ok).toBe(true);
     if (!auth.ok) throw new Error('auth failed');
     expect(auth.payloadIds).toEqual(['p1']);
-    const delivered = payloads.get('acct', auth.payloadIds[0]!)!;
-    expect(crypto.openToString(delivered.envelope)).toBe(SECRET_MESSAGE);
+    // The gated page itself now decrypts and returns the real content (G2) —
+    // no separate manual decrypt step needed, this IS the recipient's view.
+    expect(auth.items).toHaveLength(1);
+    expect(auth.items[0]!.content.toString('utf8')).toBe(SECRET_MESSAGE);
 
     // --- PUBLIC_RELEASE only after the 14-day gap
     scheduler.tickAccount('acct', privateAt + (PUBLIC_RELEASE_DELAY_DAYS - 1) * 86_400_000);

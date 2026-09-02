@@ -11,6 +11,17 @@
 //   - addressing: every recipientId on an item must be an enrolled recipient.
 //
 // It performs no state transition and no outreach, so it writes no audit entry.
+//
+// OPTIONAL BLOB OFFLOAD (G2, G1.1): when a `BlobStore` is configured, real
+// ciphertext bytes are written through to it (a photo/PDF up to the policy's
+// byte limit does not belong inline in a SQL row) and the KV-persisted `Payload`
+// keeps only a sentinel marker in `envelope.ciphertext` — metadata (kind,
+// mimeType, keyId, iv, addressing, timestamps) stays in the KV store exactly as
+// before. Writes are fire-and-forget on an internal serial queue (the SAME
+// durability model already accepted for `PostgresKeyValueStore`'s writes
+// elsewhere in this app) — `flush()` awaits them for a caller that wants a
+// durability guarantee (e.g. before shutdown). Absent a `BlobStore`, behavior is
+// byte-for-byte identical to before this existed: ciphertext stays inline.
 
 import type { Contact } from '../console';
 import { isRecipient } from '../console';
@@ -24,7 +35,17 @@ import {
   type PayloadEdit,
 } from '../domain/payload';
 import type { State } from '../domain/states';
+import type { BlobStore } from '../adapters/channels';
 import type { ContactRepository, MachineRepository, PayloadRepository } from '../persistence';
+
+/**
+ * Marks a `Payload.envelope.ciphertext` as offloaded to the configured
+ * `BlobStore`, under the same `accountId/payloadId` key `PayloadRepository`
+ * already uses. Never collides with real ciphertext: base64 output only ever
+ * contains `[A-Za-z0-9+/=]`, and this string contains a character outside that
+ * alphabet.
+ */
+export const EXTERNAL_CIPHERTEXT_MARKER = '@external-blob';
 
 export interface AuthoringServiceOptions {
   readonly payloads: PayloadRepository;
@@ -32,6 +53,8 @@ export interface AuthoringServiceOptions {
   readonly machines: MachineRepository;
   /** Deployment-supplied size/mime limits (DECISIONS.md 11.5). */
   readonly policy: ContentPolicy;
+  /** Optional blob offload for real ciphertext bytes (G2/G1.1). Absent → ciphertext stays inline (unchanged). */
+  readonly blobStore?: BlobStore;
 }
 
 export type AuthoringResult = { readonly ok: true } | { readonly ok: false; readonly reason: string };
@@ -41,12 +64,36 @@ export class AuthoringService {
   private readonly contacts: ContactRepository;
   private readonly machines: MachineRepository;
   private readonly policy: ContentPolicy;
+  private readonly blobStore: BlobStore | undefined;
+  private queue: Promise<void> = Promise.resolve();
+  private lastError: unknown;
 
   constructor(options: AuthoringServiceOptions) {
     this.payloads = options.payloads;
     this.contacts = options.contacts;
     this.machines = options.machines;
     this.policy = options.policy;
+    this.blobStore = options.blobStore;
+  }
+
+  private blobKey(accountId: string, payloadId: string): string {
+    return `${accountId}/${payloadId}`;
+  }
+
+  private enqueue(work: () => Promise<void>): void {
+    this.queue = this.queue.then(work).catch((error: unknown) => {
+      this.lastError = error;
+    });
+  }
+
+  /** Await every pending blob write. Rejects if any write since the last flush failed. */
+  async flush(): Promise<void> {
+    await this.queue;
+    if (this.lastError !== undefined) {
+      const error = this.lastError;
+      this.lastError = undefined;
+      throw error;
+    }
   }
 
   private state(accountId: string): State | undefined {
@@ -72,7 +119,7 @@ export class AuthoringService {
     if (!validation.ok) return { ok: false, reason: validation.errors.join('; ') };
     const addressCheck = this.checkAddressing(accountId, payload.recipientIds);
     if (!addressCheck.ok) return addressCheck;
-    this.payloads.save(accountId, payload);
+    this.payloads.save(accountId, this.offload(accountId, payload));
     return { ok: true };
   }
 
@@ -95,7 +142,12 @@ export class AuthoringService {
     }
     const validation = validatePayload(edited, this.policy);
     if (!validation.ok) return { ok: false, reason: validation.errors.join('; ') };
-    this.payloads.save(accountId, edited);
+    // Only re-write the blob when THIS edit actually changed the content bytes
+    // (`changes.envelope` present). A metadata-only edit (e.g. recipientIds)
+    // must never re-persist the sentinel over real content — that would
+    // silently destroy it.
+    const toSave = changes.envelope !== undefined ? this.offload(accountId, edited) : edited;
+    this.payloads.save(accountId, toSave);
     return { ok: true };
   }
 
@@ -109,7 +161,25 @@ export class AuthoringService {
       return { ok: false, reason: `unknown content ${payloadId}` };
     }
     this.payloads.delete(accountId, payloadId);
+    if (this.blobStore !== undefined) {
+      const key = this.blobKey(accountId, payloadId);
+      this.enqueue(() => this.blobStore!.delete(key));
+    }
     return { ok: true };
+  }
+
+  /**
+   * When a blob store is configured, queue the real ciphertext for durable
+   * write-through and return a copy carrying the sentinel in its place — that
+   * copy is what `PayloadRepository` persists. Absent a blob store, returns the
+   * payload unchanged (ciphertext stays inline, today's behavior).
+   */
+  private offload(accountId: string, payload: Payload): Payload {
+    if (this.blobStore === undefined) return payload;
+    const key = this.blobKey(accountId, payload.id);
+    const bytes = Buffer.from(payload.envelope.ciphertext, 'base64');
+    this.enqueue(() => this.blobStore!.put(key, bytes));
+    return { ...payload, envelope: { ...payload.envelope, ciphertext: EXTERNAL_CIPHERTEXT_MARKER } };
   }
 
   private checkAddressing(accountId: string, recipientIds: readonly string[]): AuthoringResult {
